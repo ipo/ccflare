@@ -1,17 +1,20 @@
 import { Logger } from "@ccflare/logger";
 import { type Account, getProviderDefaultBaseUrl } from "@ccflare/types";
 import { deleteTransportHeaders } from "../../base";
+import { collectQuotaSources } from "../../quota";
 import {
 	executeTokenRefresh,
 	type RefreshRequestConfig,
 } from "../../token-refresh";
-import type { TokenRefreshResult } from "../../types";
+import type { ProviderQuotaReport, TokenRefreshResult } from "../../types";
 import { AnthropicProvider } from "../anthropic/provider";
 import { CLAUDE_CODE_OAUTH_TOKEN_URL, ClaudeCodeOAuthProvider } from "./oauth";
 
 const log = new Logger("ClaudeCodeProvider");
 const PROVIDER_NAME = "claude-code" as const;
 const DEFAULT_BASE_URL = getProviderDefaultBaseUrl(PROVIDER_NAME);
+const CLAUDE_CODE_CLIENT_VERSION = "2.1.219";
+const CLAUDE_CODE_OAUTH_BETA = "oauth-2025-04-20";
 
 const CLAUDE_CODE_REFRESH_CONFIG: RefreshRequestConfig = {
 	tokenUrl: CLAUDE_CODE_OAUTH_TOKEN_URL,
@@ -52,6 +55,39 @@ export class ClaudeCodeProvider extends AnthropicProvider {
 			clientId,
 			CLAUDE_CODE_REFRESH_CONFIG,
 			log,
+		);
+	}
+
+	async fetchQuota(
+		account: Account,
+		fetchFn: typeof globalThis.fetch = globalThis.fetch,
+	): Promise<ProviderQuotaReport> {
+		if (!account.access_token) {
+			throw new Error(
+				`No access token available for Claude Code account ${account.name}`,
+			);
+		}
+
+		const baseUrl = (account.base_url ?? this.defaultBaseUrl).replace(
+			/\/+$/,
+			"",
+		);
+		const headers = {
+			Authorization: `Bearer ${account.access_token}`,
+			"anthropic-beta": CLAUDE_CODE_OAUTH_BETA,
+			"anthropic-version": "2023-06-01",
+			"Content-Type": "application/json",
+			"User-Agent": `claude-cli/${CLAUDE_CODE_CLIENT_VERSION} (external, cli)`,
+		};
+
+		return collectQuotaSources(
+			[
+				{ name: "usage", url: `${baseUrl}/api/oauth/usage` },
+				{ name: "profile", url: `${baseUrl}/api/oauth/profile` },
+			],
+			headers,
+			fetchFn,
+			[account.access_token],
 		);
 	}
 

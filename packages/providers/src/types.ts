@@ -13,6 +13,22 @@ export interface RateLimitInfo {
 	remaining?: number;
 }
 
+export type QuotaSourceState = "ok" | "failed";
+export type ProviderQuotaState = "ok" | "partial" | "failed";
+
+export interface QuotaSourceResult {
+	state: QuotaSourceState;
+	status?: number;
+	data?: unknown;
+	error?: string;
+}
+
+export interface ProviderQuotaReport {
+	state: ProviderQuotaState;
+	collectedAt: string;
+	sources: Record<string, QuotaSourceResult>;
+}
+
 export interface Provider {
 	name: string;
 	defaultBaseUrl: string;
@@ -29,6 +45,14 @@ export interface Provider {
 		account: Account,
 		clientId: string,
 	): Promise<TokenRefreshResult>;
+
+	/**
+	 * Fetch provider-native quota information for one OAuth account.
+	 */
+	fetchQuota?(
+		account: Account,
+		fetchFn?: typeof globalThis.fetch,
+	): Promise<ProviderQuotaReport>;
 
 	/**
 	 * Build the target URL for the provider

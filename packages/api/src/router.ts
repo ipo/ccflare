@@ -1,5 +1,6 @@
 import { validateNumber } from "@ccflare/core";
 import { errorResponse, NotFound } from "@ccflare/http";
+import { createAccountQuotaHandler } from "./handlers/account-quota";
 import {
 	createAccountAddHandler,
 	createAccountPauseHandler,
@@ -82,7 +83,8 @@ export class APIRouter {
 	}
 
 	private registerHandlers(): void {
-		const { config, dbOps, getProviders, getRuntimeHealth } = this.context;
+		const { config, dbOps, getProvider, getProviders, getRuntimeHealth } =
+			this.context;
 
 		// Create handlers (pre-instantiated, not created per-request)
 		const healthHandler = createHealthHandler(
@@ -113,6 +115,11 @@ export class APIRouter {
 		const accountRenameHandler = createAccountRenameHandler(dbOps);
 		const accountUpdateHandler = createAccountUpdateHandler(dbOps);
 		const accountRemoveHandler = createAccountRemoveHandler(dbOps);
+		const accountQuotaHandler = createAccountQuotaHandler(
+			dbOps,
+			config,
+			getProvider,
+		);
 
 		// Pre-instantiate auth handlers
 		const authInitHandler = createAuthInitHandler(dbOps);
@@ -201,6 +208,11 @@ export class APIRouter {
 			"POST",
 			"/api/accounts/:accountId/rename",
 			(req, _url, params) => accountRenameHandler(req, params.accountId),
+		);
+		this.addDynamicRoute(
+			"GET",
+			"/api/accounts/:accountId/quota",
+			(req, _url, params) => accountQuotaHandler(req, params.accountId),
 		);
 		this.addDynamicRoute(
 			"PATCH",

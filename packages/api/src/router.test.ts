@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Config } from "@ccflare/config";
 import { DatabaseFactory } from "@ccflare/database";
+import { providerRegistry } from "@ccflare/providers";
 import { stopAllOAuthCallbackForwarders } from "./handlers/oauth";
 import { APIRouter } from "./router";
 
@@ -25,6 +26,7 @@ function createRouterContext() {
 		router: new APIRouter({
 			config,
 			dbOps,
+			getProvider: (provider) => providerRegistry.getProvider(provider),
 			getProviders: () => ["anthropic", "openai", "claude-code", "codex"],
 		}),
 	};
@@ -71,6 +73,16 @@ async function createApiKeyAccount(
 		data: { accountId: string };
 	};
 	return { accountId: body.data.accountId };
+}
+
+function installFetchMock(
+	handler: (request: Request) => Response | Promise<Response>,
+): void {
+	globalThis.fetch = Object.assign(
+		async (input: RequestInfo | URL, init?: RequestInit) =>
+			handler(new Request(input, init)),
+		{ preconnect: originalFetch.preconnect },
+	) as typeof fetch;
 }
 
 afterEach(() => {
@@ -233,6 +245,7 @@ describe("APIRouter", () => {
 		const router = new APIRouter({
 			config,
 			dbOps,
+			getProvider: (provider) => providerRegistry.getProvider(provider),
 			getProviders: () => ["anthropic", "openai", "claude-code", "codex"],
 			getRuntimeHealth: () => ({
 				asyncWriter: {
@@ -699,6 +712,208 @@ describe("APIRouter", () => {
 			},
 		);
 		expect(unexpectedFieldResponse.status).toBe(400);
+	});
+
+	it("fetches collective Claude Code quota after refreshing expired credentials", async () => {
+		const { router, dbOps } = createRouterContext();
+		const account = dbOps.createOAuthAccount({
+			name: "quota-owner",
+			provider: "claude-code",
+			accessToken: "expired-access-token",
+			refreshToken: "rotating-refresh-token",
+			expiresAt: Date.now() - 1,
+		});
+		const requestedUrls: string[] = [];
+
+		installFetchMock(async (request) => {
+			requestedUrls.push(request.url);
+			if (request.url === "https://platform.claude.com/v1/oauth/token") {
+				expect(await request.text()).toContain(
+					'"refresh_token":"rotating-refresh-token"',
+				);
+				return Response.json({
+					access_token: "fresh-access-token",
+					refresh_token: "fresh-refresh-token",
+					expires_in: 3600,
+				});
+			}
+			if (request.url.endsWith("/api/oauth/usage")) {
+				expect(request.headers.get("authorization")).toBe(
+					"Bearer fresh-access-token",
+				);
+				return Response.json({
+					five_hour: { utilization: 25 },
+					access_token: "upstream-secret",
+				});
+			}
+			if (request.url.endsWith("/api/oauth/profile")) {
+				return Response.json({ subscription_type: "max" });
+			}
+			return Response.json({ error: "unexpected URL" }, { status: 500 });
+		});
+
+		const response = await apiRequest(
+			router,
+			"GET",
+			`/api/accounts/${account.id}/quota`,
+		);
+		expect(response.status).toBe(200);
+		const body = (await response.json()) as {
+			account: { id: string; provider: string };
+			state: string;
+			sources: Record<string, { data?: unknown }>;
+		};
+		expect(body).toEqual(
+			expect.objectContaining({
+				account: expect.objectContaining({
+					id: account.id,
+					provider: "claude-code",
+				}),
+				state: "ok",
+				sources: {
+					usage: expect.objectContaining({
+						data: {
+							five_hour: { utilization: 25 },
+							access_token: "[REDACTED]",
+						},
+					}),
+					profile: expect.objectContaining({
+						data: { subscription_type: "max" },
+					}),
+				},
+			}),
+		);
+		expect(requestedUrls).toEqual([
+			"https://platform.claude.com/v1/oauth/token",
+			"https://api.anthropic.com/api/oauth/usage",
+			"https://api.anthropic.com/api/oauth/profile",
+		]);
+		expect(dbOps.getAccount(account.id)).toEqual(
+			expect.objectContaining({
+				access_token: "fresh-access-token",
+				refresh_token: "fresh-refresh-token",
+			}),
+		);
+		const serialized = JSON.stringify(body);
+		expect(serialized).not.toContain("fresh-access-token");
+		expect(serialized).not.toContain("fresh-refresh-token");
+		expect(serialized).not.toContain("upstream-secret");
+	});
+
+	it("refreshes and retries once when all quota probes reject a current token", async () => {
+		const { router, dbOps } = createRouterContext();
+		const account = dbOps.createOAuthAccount({
+			name: "stale-quota-owner",
+			provider: "claude-code",
+			accessToken: "apparently-current-token",
+			refreshToken: "stale-refresh-token",
+			expiresAt: Date.now() + 60_000,
+		});
+		let staleQuotaRequests = 0;
+		let freshQuotaRequests = 0;
+
+		installFetchMock((request) => {
+			if (request.url === "https://platform.claude.com/v1/oauth/token") {
+				return Response.json({
+					access_token: "retried-access-token",
+					refresh_token: "retried-refresh-token",
+					expires_in: 3600,
+				});
+			}
+			if (
+				request.headers.get("authorization") ===
+				"Bearer apparently-current-token"
+			) {
+				staleQuotaRequests++;
+				return Response.json({ error: "invalid token" }, { status: 401 });
+			}
+
+			expect(request.headers.get("authorization")).toBe(
+				"Bearer retried-access-token",
+			);
+			freshQuotaRequests++;
+			return Response.json({ available: true });
+		});
+
+		const response = await apiRequest(
+			router,
+			"GET",
+			`/api/accounts/${account.id}/quota`,
+		);
+		expect(response.status).toBe(200);
+		expect((await response.json()) as { state: string }).toEqual(
+			expect.objectContaining({ state: "ok" }),
+		);
+		expect(staleQuotaRequests).toBe(2);
+		expect(freshQuotaRequests).toBe(2);
+		expect(dbOps.getAccount(account.id)).toEqual(
+			expect.objectContaining({
+				access_token: "retried-access-token",
+				refresh_token: "retried-refresh-token",
+			}),
+		);
+	});
+
+	it("returns explicit account quota errors for missing and unsupported accounts", async () => {
+		const { router } = createRouterContext();
+		const missingResponse = await apiRequest(
+			router,
+			"GET",
+			"/api/accounts/missing-account/quota",
+		);
+		expect(missingResponse.status).toBe(404);
+		expect(await missingResponse.json()).toEqual({
+			error: "Account not found",
+		});
+
+		const { accountId } = await createApiKeyAccount(router, {
+			name: "unsupported-quota-owner",
+		});
+		const unsupportedResponse = await apiRequest(
+			router,
+			"GET",
+			`/api/accounts/${accountId}/quota`,
+		);
+		expect(unsupportedResponse.status).toBe(501);
+		expect(await unsupportedResponse.json()).toEqual({
+			error: "Quota checks are not implemented for provider 'anthropic'",
+			details: { provider: "anthropic" },
+		});
+	});
+
+	it("returns 502 with secret-safe details when every quota source fails", async () => {
+		const { router, dbOps } = createRouterContext();
+		const account = dbOps.createOAuthAccount({
+			name: "unavailable-quota-owner",
+			provider: "claude-code",
+			accessToken: "valid-access-token",
+			refreshToken: "valid-refresh-token",
+			expiresAt: Date.now() + 60_000,
+		});
+		installFetchMock(() =>
+			Response.json(
+				{
+					error: "upstream unavailable",
+					access_token: "upstream-secret",
+				},
+				{ status: 503 },
+			),
+		);
+
+		const response = await apiRequest(
+			router,
+			"GET",
+			`/api/accounts/${account.id}/quota`,
+		);
+		expect(response.status).toBe(502);
+		const body = (await response.json()) as {
+			error: string;
+			details: { state: string };
+		};
+		expect(body.error).toBe("All provider quota sources failed");
+		expect(body.details.state).toBe("failed");
+		expect(JSON.stringify(body)).not.toContain("upstream-secret");
+		expect(JSON.stringify(body)).not.toContain("valid-access-token");
 	});
 
 	it("resets stats consistently through the API", async () => {

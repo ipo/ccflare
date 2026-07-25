@@ -32,6 +32,12 @@ export const NotFound = (message: string, details?: unknown) =>
 export const Conflict = (message: string, details?: unknown) =>
 	new HttpError(409, message, details);
 
+export const BadGateway = (message: string, details?: unknown) =>
+	new HttpError(502, message, details);
+
+export const NotImplemented = (message: string, details?: unknown) =>
+	new HttpError(501, message, details);
+
 export const InternalServerError = (message: string, details?: unknown) =>
 	new HttpError(500, message, details);
 

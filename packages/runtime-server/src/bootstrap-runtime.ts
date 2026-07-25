@@ -96,6 +96,7 @@ export function bootstrapRuntime(
 	const apiRouter = new APIRouter({
 		config,
 		dbOps,
+		getProvider: (provider) => providerRegistry.getProvider(provider),
 		getProviders: () => providerRegistry.listProviders(),
 		getRuntimeHealth: () => ({
 			asyncWriter: {

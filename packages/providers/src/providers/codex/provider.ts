@@ -1,11 +1,12 @@
 import { Logger } from "@ccflare/logger";
 import { type Account, getProviderDefaultBaseUrl } from "@ccflare/types";
 import { deleteTransportHeaders } from "../../base";
+import { collectQuotaSources } from "../../quota";
 import {
 	executeTokenRefresh,
 	type RefreshRequestConfig,
 } from "../../token-refresh";
-import type { TokenRefreshResult } from "../../types";
+import type { ProviderQuotaReport, TokenRefreshResult } from "../../types";
 import {
 	OPENAI_OAUTH_CLIENT_ID,
 	OPENAI_OAUTH_TOKEN_URL,
@@ -22,6 +23,47 @@ const CODEX_USER_AGENT = `codex_cli_rs/${CODEX_CLIENT_VERSION} (Mac OS; arm64)`;
 const log = new Logger("CodexProvider");
 const PROVIDER_NAME = "codex" as const;
 const DEFAULT_BASE_URL = getProviderDefaultBaseUrl(PROVIDER_NAME);
+
+function decodeCodexAccountId(accessToken: string): string | undefined {
+	try {
+		const payload = accessToken.split(".")[1];
+		if (!payload) {
+			return undefined;
+		}
+		const claims = JSON.parse(
+			Buffer.from(payload, "base64url").toString("utf8"),
+		) as Record<string, unknown>;
+		const authClaims = claims["https://api.openai.com/auth"];
+
+		if (
+			authClaims &&
+			typeof authClaims === "object" &&
+			"chatgpt_account_id" in authClaims &&
+			typeof authClaims.chatgpt_account_id === "string"
+		) {
+			return authClaims.chatgpt_account_id;
+		}
+
+		if (typeof claims.chatgpt_account_id === "string") {
+			return claims.chatgpt_account_id;
+		}
+		if (typeof claims.account_id === "string") {
+			return claims.account_id;
+		}
+	} catch {
+		// Opaque or malformed access tokens simply omit the optional account header.
+	}
+
+	return undefined;
+}
+
+function getCodexQuotaBaseUrl(account: Account): string {
+	const url = new URL(account.base_url ?? DEFAULT_BASE_URL);
+	url.pathname = url.pathname.replace(/\/codex\/?$/, "");
+	url.search = "";
+	url.hash = "";
+	return url.toString().replace(/\/+$/, "");
+}
 
 const CODEX_REFRESH_CONFIG: RefreshRequestConfig = {
 	tokenUrl: OPENAI_OAUTH_TOKEN_URL,
@@ -61,6 +103,42 @@ export class CodexProvider extends OpenAIProvider {
 		_clientId: string,
 	): Promise<TokenRefreshResult> {
 		return executeTokenRefresh(account, _clientId, CODEX_REFRESH_CONFIG, log);
+	}
+
+	async fetchQuota(
+		account: Account,
+		fetchFn: typeof globalThis.fetch = globalThis.fetch,
+	): Promise<ProviderQuotaReport> {
+		if (!account.access_token) {
+			throw new Error(
+				`No access token available for Codex account ${account.name}`,
+			);
+		}
+
+		const headers: Record<string, string> = {
+			Authorization: `Bearer ${account.access_token}`,
+			Accept: "application/json",
+			"User-Agent": CODEX_USER_AGENT,
+		};
+		const remoteAccountId = decodeCodexAccountId(account.access_token);
+		if (remoteAccountId) {
+			headers["ChatGPT-Account-Id"] = remoteAccountId;
+		}
+
+		const baseUrl = getCodexQuotaBaseUrl(account);
+		return collectQuotaSources(
+			[
+				{ name: "usage", url: `${baseUrl}/wham/usage` },
+				{ name: "account", url: `${baseUrl}/wham/accounts/check` },
+				{
+					name: "resetCredits",
+					url: `${baseUrl}/wham/rate-limit-reset-credits`,
+				},
+			],
+			headers,
+			fetchFn,
+			[account.access_token],
+		);
 	}
 
 	prepareHeaders(headers: Headers, account: Account | null): Headers {

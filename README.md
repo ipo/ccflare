@@ -187,6 +187,7 @@ Key endpoints:
 
 - `GET /health` — status, account count, strategy, supported providers
 - `GET /api/accounts` — list accounts
+- `GET /api/accounts/:id/quota` — fetch live quota for one Claude Code or Codex account
 - `POST /api/accounts` — create an account
 - `PATCH /api/accounts/:id` — update an account (rename, change `base_url`)
 - `DELETE /api/accounts/:id` — remove an account

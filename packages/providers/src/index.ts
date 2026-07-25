@@ -6,6 +6,7 @@ export { BaseProvider } from "./base";
 export * from "./oauth";
 // Export providers
 export * from "./providers/index";
+export * from "./quota";
 // Export registry functions
 export {
 	createProviderRegistry,

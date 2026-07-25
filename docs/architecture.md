@@ -244,6 +244,7 @@ What stays in provider implementations:
 - auth header preparation
 - OAuth provider adapters
 - refresh token behavior
+- provider-native account quota probes
 - provider-native rate-limit parsing
 - provider-specific usage parsing
 

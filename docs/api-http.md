@@ -212,6 +212,84 @@ List all configured accounts with their current status.
 curl http://localhost:8080/api/accounts
 ```
 
+#### GET /api/accounts/:accountId/quota
+
+Fetch live provider-native quota data for one selected OAuth account. The
+account is addressed directly by its ccflare account ID; load balancing,
+paused state, and current inference rate-limit state do not affect which
+credentials are queried.
+
+Supported providers:
+
+- `claude-code` — collects Anthropic OAuth usage and profile data
+- `codex` — collects ChatGPT usage, account-check, and reset-credit data
+
+The large Codex profile-history probe is intentionally omitted because it does
+not provide current quota windows.
+
+The handler refreshes missing, expired, expiry-less, or nearly expired OAuth
+credentials before querying. A fully unauthorized collective response also
+triggers one refresh-and-retry. Rotated tokens are persisted but are never
+included in the API response.
+
+**Response:**
+
+```json
+{
+  "account": {
+    "id": "uuid-here",
+    "name": "claude-work",
+    "provider": "claude-code"
+  },
+  "state": "ok",
+  "collectedAt": "2026-07-25T08:30:00.000Z",
+  "sources": {
+    "usage": {
+      "state": "ok",
+      "status": 200,
+      "data": {
+        "five_hour": {
+          "utilization": 31
+        }
+      }
+    },
+    "profile": {
+      "state": "ok",
+      "status": 200,
+      "data": {
+        "subscription_type": "max"
+      }
+    }
+  }
+}
+```
+
+`state` is:
+
+- `ok` when every provider probe succeeds
+- `partial` when at least one probe succeeds and another fails
+- `failed` when every probe fails
+
+A partial report is returned with `200` so callers can use the successful
+sources. If every source fails, the endpoint returns `502` and places the same
+secret-safe report in `details`. Unknown account IDs return `404`. Accounts
+from other providers return `501` with an explicit not-implemented message.
+
+Upstream payload fields named like credentials are redacted recursively.
+Provider profile/account sources can still contain non-secret identifying or
+subscription information. Because the management API itself has no
+authentication, do not expose it to untrusted networks without an
+authentication layer.
+
+Quota windows change slowly. Poll no more often than every 5 minutes; every
+15 minutes is the recommended normal interval.
+
+**Example:**
+
+```bash
+curl http://localhost:8080/api/accounts/uuid-here/quota
+```
+
 ---
 
 ### Auth Flow

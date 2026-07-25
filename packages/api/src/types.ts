@@ -1,6 +1,11 @@
 import type { Config } from "@ccflare/config";
 import type { DatabaseOperations } from "@ccflare/database";
 import type {
+	Provider,
+	ProviderQuotaState,
+	QuotaSourceResult,
+} from "@ccflare/providers";
+import type {
 	AccountProvider,
 	AuthMethod,
 	RuntimeHealth,
@@ -34,9 +39,21 @@ export interface AccountResponse {
 	};
 }
 
+export interface AccountQuotaResponse {
+	account: {
+		id: string;
+		name: string;
+		provider: AccountProvider;
+	};
+	state: ProviderQuotaState;
+	collectedAt: string;
+	sources: Record<string, QuotaSourceResult>;
+}
+
 export interface APIContext {
 	config: Config;
 	dbOps: DatabaseOperations;
 	getProviders: () => string[];
+	getProvider: (provider: AccountProvider) => Provider | undefined;
 	getRuntimeHealth?: () => RuntimeHealth;
 }

@@ -11,6 +11,7 @@ ccflare’s provider layer gives the rest of the system a consistent way to deal
 - auth header preparation
 - OAuth helper adapters
 - refresh-token orchestration
+- provider-native quota fetching
 - rate-limit parsing
 - response/usage parsing helpers
 
@@ -128,9 +129,38 @@ Each provider implementation owns:
 - `parseRateLimit(...)`
 - optional OAuth adapter hooks
 - optional token refresh support
+- optional account quota fetching
 - provider-format-specific usage parsing
 
 This keeps provider-specific protocol logic out of `runtime-server` and mostly out of `proxy`.
+
+## Account Quota Fetching
+
+`GET /api/accounts/:accountId/quota` asks the selected provider implementation
+for live quota data using that account's OAuth credentials. This is a
+control-plane operation: it does not select another account or send an
+inference request.
+
+Provider implementations own the remote protocol details:
+
+- Claude Code queries `/api/oauth/usage` and `/api/oauth/profile`.
+- Codex queries `/wham/usage`, `/wham/accounts/check`, and
+  `/wham/rate-limit-reset-credits`.
+- Codex derives the optional `ChatGPT-Account-Id` header from the access-token
+  JWT in memory and never returns decoded claims.
+
+The large Codex `/wham/profiles/me` history is intentionally not fetched. It is
+optional in the reference script and does not provide the current quota windows.
+
+The API layer owns local account lookup, token refresh and persistence, and
+HTTP error mapping. Independent upstream probes run concurrently so a failed
+secondary source does not discard usable quota data. Credential-shaped fields
+are recursively redacted before any provider payload reaches the management
+response.
+
+`anthropic` and `openai` accounts currently return `501` because this endpoint
+only implements the OAuth subscription quota protocols used by Claude Code and
+Codex.
 
 ## Rate Limit Handling
 

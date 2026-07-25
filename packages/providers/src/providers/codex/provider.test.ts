@@ -9,6 +9,27 @@ import {
 } from "../../test-helpers";
 import { CodexProvider } from "./provider";
 
+function createQuotaFetchMock(
+	handler: (request: Request) => Response | Promise<Response>,
+): typeof fetch {
+	return Object.assign(
+		async (input: RequestInfo | URL, init?: RequestInit) =>
+			handler(new Request(input, init)),
+		{ preconnect: originalFetch.preconnect },
+	) as typeof fetch;
+}
+
+function createCodexJwt(accountId: string): string {
+	const payload = Buffer.from(
+		JSON.stringify({
+			"https://api.openai.com/auth": {
+				chatgpt_account_id: accountId,
+			},
+		}),
+	).toString("base64url");
+	return `header.${payload}.signature`;
+}
+
 describe("CodexProvider", () => {
 	const provider = new CodexProvider();
 
@@ -92,6 +113,69 @@ describe("CodexProvider", () => {
 			refreshToken: "fresh-codex-refresh-token",
 			expiresAt: expect.any(Number),
 		});
+	});
+
+	it("collects Codex quota sources with the remote account identity", async () => {
+		const requests: Request[] = [];
+		const accessToken = createCodexJwt("remote-account-123");
+		const fetchFn = createQuotaFetchMock((request) => {
+			requests.push(request);
+			return Response.json({
+				allowed: true,
+				token_count: 15,
+				id_token: "must-not-leak",
+			});
+		});
+
+		const report = await provider.fetchQuota(
+			createOAuthAccount("codex", { access_token: accessToken }),
+			fetchFn,
+		);
+
+		expect(report.state).toBe("ok");
+		expect(requests.map((request) => request.url)).toEqual([
+			"https://chatgpt.com/backend-api/wham/usage",
+			"https://chatgpt.com/backend-api/wham/accounts/check",
+			"https://chatgpt.com/backend-api/wham/rate-limit-reset-credits",
+		]);
+		for (const request of requests) {
+			expect(request.headers.get("authorization")).toBe(
+				`Bearer ${accessToken}`,
+			);
+			expect(request.headers.get("chatgpt-account-id")).toBe(
+				"remote-account-123",
+			);
+			expect(request.headers.get("user-agent")).toContain("codex_cli_rs/");
+		}
+		expect(report.sources.usage.data).toEqual({
+			allowed: true,
+			token_count: 15,
+			id_token: "[REDACTED]",
+		});
+		expect(JSON.stringify(report)).not.toContain("must-not-leak");
+		expect(JSON.stringify(report)).not.toContain(accessToken);
+	});
+
+	it("uses a custom Codex backend base and tolerates opaque access tokens", async () => {
+		const requests: Request[] = [];
+		const fetchFn = createQuotaFetchMock((request) => {
+			requests.push(request);
+			return Response.json({ allowed: true });
+		});
+
+		const report = await provider.fetchQuota(
+			createOAuthAccount("codex", {
+				base_url: "https://codex.internal/backend-api/codex/",
+				access_token: "opaque-access-token",
+			}),
+			fetchFn,
+		);
+
+		expect(report.state).toBe("ok");
+		expect(requests[0].url).toBe(
+			"https://codex.internal/backend-api/wham/usage",
+		);
+		expect(requests[0].headers.has("chatgpt-account-id")).toBe(false);
 	});
 
 	it("parses Codex rate limit headers", () => {

@@ -9,6 +9,16 @@ import {
 } from "../../test-helpers";
 import { ClaudeCodeProvider } from "./provider";
 
+function createQuotaFetchMock(
+	handler: (request: Request) => Response | Promise<Response>,
+): typeof fetch {
+	return Object.assign(
+		async (input: RequestInfo | URL, init?: RequestInit) =>
+			handler(new Request(input, init)),
+		{ preconnect: originalFetch.preconnect },
+	) as typeof fetch;
+}
+
 describe("ClaudeCodeProvider", () => {
 	const provider = new ClaudeCodeProvider();
 
@@ -86,6 +96,73 @@ describe("ClaudeCodeProvider", () => {
 			accessToken: "fresh-claude-access-token",
 			refreshToken: "fresh-claude-refresh-token",
 			expiresAt: expect.any(Number),
+		});
+	});
+
+	it("collects Claude Code usage and profile quota data without leaking secrets", async () => {
+		const requests: Request[] = [];
+		const fetchFn = createQuotaFetchMock((request) => {
+			requests.push(request);
+			const data = request.url.endsWith("/usage")
+				? {
+						five_hour: { utilization: 12 },
+						token_count: 42,
+						access_token: "must-not-leak",
+						note: "rejected claude-access-token",
+					}
+				: {
+						subscription_type: "max",
+						refreshToken: "must-not-leak-either",
+					};
+			return Response.json(data);
+		});
+
+		const report = await provider.fetchQuota(
+			createOAuthAccount("claude-code"),
+			fetchFn,
+		);
+
+		expect(report.state).toBe("ok");
+		expect(requests.map((request) => request.url)).toEqual([
+			"https://api.anthropic.com/api/oauth/usage",
+			"https://api.anthropic.com/api/oauth/profile",
+		]);
+		for (const request of requests) {
+			expect(request.headers.get("authorization")).toBe(
+				"Bearer claude-access-token",
+			);
+			expect(request.headers.get("anthropic-beta")).toBe("oauth-2025-04-20");
+			expect(request.headers.get("anthropic-version")).toBe("2023-06-01");
+			expect(request.headers.get("user-agent")).toContain("claude-cli/");
+		}
+		expect(report.sources.usage.data).toEqual({
+			five_hour: { utilization: 12 },
+			token_count: 42,
+			access_token: "[REDACTED]",
+			note: "rejected [REDACTED]",
+		});
+		expect(JSON.stringify(report)).not.toContain("must-not-leak");
+	});
+
+	it("retains successful Claude Code quota sources when another probe fails", async () => {
+		const fetchFn = createQuotaFetchMock((request) =>
+			request.url.endsWith("/profile")
+				? Response.json({ error: "temporarily unavailable" }, { status: 503 })
+				: Response.json({ five_hour: { utilization: 20 } }),
+		);
+
+		const report = await provider.fetchQuota(
+			createOAuthAccount("claude-code"),
+			fetchFn,
+		);
+
+		expect(report.state).toBe("partial");
+		expect(report.sources.usage.state).toBe("ok");
+		expect(report.sources.profile).toEqual({
+			state: "failed",
+			status: 503,
+			data: { error: "temporarily unavailable" },
+			error: "Upstream quota request failed with HTTP 503",
 		});
 	});
 
