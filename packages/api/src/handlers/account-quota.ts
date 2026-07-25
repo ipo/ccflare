@@ -19,7 +19,11 @@ import type { AccountQuotaResponse } from "../types";
 
 const log = new Logger("AccountQuotaHandler");
 const TOKEN_SAFETY_WINDOW_MS = 30_000;
-const QUOTA_PROVIDERS = new Set<AccountProvider>(["claude-code", "codex"]);
+const QUOTA_PROVIDERS = new Set<AccountProvider>([
+	"claude-code",
+	"codex",
+	"kimi",
+]);
 
 function needsTokenRefresh(account: Account, now = Date.now()): boolean {
 	return (

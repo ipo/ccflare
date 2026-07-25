@@ -167,6 +167,8 @@ Provider implementations own the remote protocol details:
   `/wham/rate-limit-reset-credits`.
 - Codex derives the optional `ChatGPT-Account-Id` header from the access-token
   JWT in memory and never returns decoded claims.
+- Kimi queries `/usages`, which returns the weekly summary, per-window limits
+  and the booster wallet in a single payload.
 
 The large Codex `/wham/profiles/me` history is intentionally not fetched. It is
 optional in the reference script and does not provide the current quota windows.
@@ -178,8 +180,8 @@ are recursively redacted before any provider payload reaches the management
 response.
 
 `anthropic` and `openai` accounts currently return `501` because this endpoint
-only implements the OAuth subscription quota protocols used by Claude Code and
-Codex.
+only implements the OAuth subscription quota protocols used by Claude Code,
+Codex and Kimi.
 
 ## Rate Limit Handling
 
@@ -276,7 +278,8 @@ A model id absent from the catalogue logs one warning and records a cost of 0.
   refresh token is rotated on each refresh
 - plan model ids are aliased onto Moonshot's metered ids for costing; see
   [Request Cost](#request-cost)
-- quota fetching is not implemented yet
+- quota fetching probes `{baseUrl}/usages`, the same endpoint the kimi-cli
+  usage view polls
 
 ## Adding a New Provider
 

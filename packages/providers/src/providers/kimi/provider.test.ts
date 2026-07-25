@@ -32,6 +32,16 @@ function account(overrides: Partial<Account> = {}): Account {
 	} as Account;
 }
 
+function createQuotaFetchMock(
+	handler: (request: Request) => Response | Promise<Response>,
+): typeof fetch {
+	return Object.assign(
+		async (input: RequestInfo | URL, init?: RequestInit) =>
+			handler(new Request(input, init)),
+		{ preconnect: originalFetch.preconnect },
+	) as typeof fetch;
+}
+
 afterEach(() => {
 	globalThis.fetch = originalFetch;
 });
@@ -89,6 +99,76 @@ describe("KimiProvider", () => {
 		expect(result.accessToken).toBe("new-access");
 		expect(result.refreshToken).toBe("rotated-refresh");
 		expect(result.expiresAt).toBeGreaterThan(Date.now());
+	});
+
+	it("collects Kimi quota from /usages and redacts credential-shaped fields", async () => {
+		const provider = new KimiProvider();
+		const requests: Request[] = [];
+		const fetchFn = createQuotaFetchMock((request) => {
+			requests.push(request);
+			return Response.json({
+				usage: { name: "Weekly limit", used: 40, limit: 1000 },
+				limits: [{ detail: { name: "5h limit", used: 1, limit: 100 } }],
+				access_token: "must-not-leak",
+			});
+		});
+
+		const report = await provider.fetchQuota(account(), fetchFn);
+
+		expect(report.state).toBe("ok");
+		expect(requests.map((request) => request.url)).toEqual([
+			"https://api.kimi.com/coding/v1/usages",
+		]);
+		expect(requests[0].headers.get("authorization")).toBe(
+			"Bearer stored-access",
+		);
+		expect(requests[0].headers.get("accept")).toBe("application/json");
+		expect(report.sources.usage.data).toEqual({
+			usage: { name: "Weekly limit", used: 40, limit: 1000 },
+			limits: [{ detail: { name: "5h limit", used: 1, limit: 100 } }],
+			access_token: "[REDACTED]",
+		});
+		expect(JSON.stringify(report)).not.toContain("must-not-leak");
+		expect(JSON.stringify(report)).not.toContain("stored-access");
+	});
+
+	it("uses the account's custom base URL for the Kimi usage probe", async () => {
+		const provider = new KimiProvider();
+		const requests: Request[] = [];
+		const fetchFn = createQuotaFetchMock((request) => {
+			requests.push(request);
+			return Response.json({ usage: { used: 0, limit: 100 } });
+		});
+
+		const report = await provider.fetchQuota(
+			account({ base_url: "https://kimi.internal/coding/v1/" }),
+			fetchFn,
+		);
+
+		expect(report.state).toBe("ok");
+		expect(requests[0].url).toBe("https://kimi.internal/coding/v1/usages");
+	});
+
+	it("reports a failed Kimi quota probe without discarding the error detail", async () => {
+		const provider = new KimiProvider();
+		const fetchFn = createQuotaFetchMock(() =>
+			Response.json({ error: "invalid token" }, { status: 401 }),
+		);
+
+		const report = await provider.fetchQuota(account(), fetchFn);
+
+		expect(report.state).toBe("failed");
+		expect(report.sources.usage).toEqual(
+			expect.objectContaining({ state: "failed", status: 401 }),
+		);
+	});
+
+	it("rejects quota fetching without an access token", async () => {
+		const provider = new KimiProvider();
+
+		await expect(
+			provider.fetchQuota(account({ access_token: null })),
+		).rejects.toThrow("No access token available for Kimi account");
 	});
 
 	it("keeps the stored refresh token when the server omits a new one", async () => {

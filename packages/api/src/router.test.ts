@@ -854,6 +854,87 @@ describe("APIRouter", () => {
 		);
 	});
 
+	it("fetches Kimi quota from /usages after refreshing expired credentials", async () => {
+		const { router, dbOps } = createRouterContext();
+		const account = dbOps.createOAuthAccount({
+			name: "kimi-quota-owner",
+			provider: "kimi",
+			accessToken: "expired-kimi-access-token",
+			refreshToken: "rotating-kimi-refresh-token",
+			expiresAt: Date.now() - 1,
+		});
+		const requestedUrls: string[] = [];
+
+		installFetchMock(async (request) => {
+			requestedUrls.push(request.url);
+			if (request.url === "https://auth.kimi.com/api/oauth/token") {
+				expect(await request.text()).toContain(
+					"refresh_token=rotating-kimi-refresh-token",
+				);
+				return Response.json({
+					access_token: "fresh-kimi-access-token",
+					refresh_token: "fresh-kimi-refresh-token",
+					expires_in: 900,
+				});
+			}
+			if (request.url.endsWith("/usages")) {
+				expect(request.headers.get("authorization")).toBe(
+					"Bearer fresh-kimi-access-token",
+				);
+				return Response.json({
+					usage: { name: "Weekly limit", used: 40, limit: 1000 },
+					limits: [{ detail: { name: "5h limit", used: 1, limit: 100 } }],
+					refresh_token: "upstream-secret",
+				});
+			}
+			return Response.json({ error: "unexpected URL" }, { status: 500 });
+		});
+
+		const response = await apiRequest(
+			router,
+			"GET",
+			`/api/accounts/${account.id}/quota`,
+		);
+		expect(response.status).toBe(200);
+		const body = (await response.json()) as {
+			account: { id: string; provider: string };
+			state: string;
+			sources: Record<string, { data?: unknown }>;
+		};
+		expect(body).toEqual(
+			expect.objectContaining({
+				account: expect.objectContaining({
+					id: account.id,
+					provider: "kimi",
+				}),
+				state: "ok",
+				sources: {
+					usage: expect.objectContaining({
+						data: {
+							usage: { name: "Weekly limit", used: 40, limit: 1000 },
+							limits: [{ detail: { name: "5h limit", used: 1, limit: 100 } }],
+							refresh_token: "[REDACTED]",
+						},
+					}),
+				},
+			}),
+		);
+		expect(requestedUrls).toEqual([
+			"https://auth.kimi.com/api/oauth/token",
+			"https://api.kimi.com/coding/v1/usages",
+		]);
+		expect(dbOps.getAccount(account.id)).toEqual(
+			expect.objectContaining({
+				access_token: "fresh-kimi-access-token",
+				refresh_token: "fresh-kimi-refresh-token",
+			}),
+		);
+		const serialized = JSON.stringify(body);
+		expect(serialized).not.toContain("fresh-kimi-access-token");
+		expect(serialized).not.toContain("fresh-kimi-refresh-token");
+		expect(serialized).not.toContain("upstream-secret");
+	});
+
 	it("returns explicit account quota errors for missing and unsupported accounts", async () => {
 		const { router } = createRouterContext();
 		const missingResponse = await apiRequest(
