@@ -105,8 +105,14 @@ export class DatabaseOperations implements StrategyStore, Disposable {
 		return this.accounts.findByProvider(provider);
 	}
 
-	getAvailableAccountsByProvider(provider: Account["provider"]): Account[] {
-		return this.accounts.findAvailableForProvider(provider);
+	getAvailableAccountsByProvider(
+		provider: Account["provider"],
+		options?: { includeRateLimited?: boolean },
+	): Account[] {
+		return this.accounts.findAvailableForProvider(
+			provider,
+			options?.includeRateLimited ?? false,
+		);
 	}
 
 	createAccount(data: CreateAccountData): Account {

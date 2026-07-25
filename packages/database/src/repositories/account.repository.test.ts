@@ -77,6 +77,30 @@ describe("AccountRepository", () => {
 		);
 	});
 
+	it("filters rate-limited accounts unless explicitly included", () => {
+		const usable = repository.create({
+			name: "usable-codex",
+			provider: "codex",
+			auth_method: "oauth",
+		});
+		const limited = repository.create({
+			name: "limited-codex",
+			provider: "codex",
+			auth_method: "oauth",
+		});
+		repository.setRateLimited(limited.id, Date.now() + 60_000);
+
+		expect(
+			repository.findAvailableForProvider("codex").map((a) => a.id),
+		).toEqual([usable.id]);
+		expect(
+			repository
+				.findAvailableForProvider("codex", true)
+				.map((a) => a.id)
+				.sort(),
+		).toEqual([limited.id, usable.id].sort());
+	});
+
 	it("updates existing accounts and returns the updated row", () => {
 		const created = repository.create({
 			name: "rename-me",

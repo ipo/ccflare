@@ -65,4 +65,41 @@ describe("selectAccountsForRequest", () => {
 		expect(seenProviders).toEqual([["openai"]]);
 		expect(selected.map((account) => account.name)).toEqual(["openai-account"]);
 	});
+
+	it("includes rate-limited accounts only for separately metered models", () => {
+		const seenOptions: Array<{ includeRateLimited?: boolean } | undefined> = [];
+		const meta: RequestMeta = {
+			id: "request-2",
+			method: "POST",
+			path: "/v1/ccflare/openai/responses",
+			timestamp: Date.now(),
+		};
+		const ctx = {
+			providerName: "codex",
+			strategy: {
+				select(accounts: Account[]) {
+					return accounts;
+				},
+			},
+			dbOps: {
+				getAvailableAccountsByProvider(
+					_provider: AccountProvider,
+					options?: { includeRateLimited?: boolean },
+				) {
+					seenOptions.push(options);
+					return [];
+				},
+			},
+		} as unknown as ResolvedProxyContext;
+
+		selectAccountsForRequest(meta, ctx, "gpt-5.3-codex-spark");
+		selectAccountsForRequest(meta, ctx, "gpt-5.5");
+		selectAccountsForRequest(meta, ctx);
+
+		expect(seenOptions).toEqual([
+			{ includeRateLimited: true },
+			{ includeRateLimited: false },
+			{ includeRateLimited: false },
+		]);
+	});
 });

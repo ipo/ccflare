@@ -206,6 +206,22 @@ All other providers return `501` for now.
 
 Providers normalize native rate-limit signals into a shared shape consumed by the proxy/database layers.
 
+Rate-limit marks are tracked per account, but some models are metered
+separately upstream. OpenAI's Codex quota API reports these via
+`additional_rate_limits` — for example `gpt-5.3-codex-spark` meters as
+`codex_bengalfox` while every other Codex model shares the main weekly
+meter. The proxy keeps an exemption list (suffix-matched, currently
+`*-codex-spark` on `codex`) with two effects:
+
+- Account selection ignores the account-level `rate_limited_until` mark for
+  exempt models, so main-meter exhaustion does not block them.
+- A 429 on an exempt model does not set the account-level mark, so a full
+  Spark meter cannot poison main-meter models either. The upstream 429 body
+  is forwarded to the client in that case.
+
+This is an exemption, not per-meter accounting: ccflare still keeps a single
+rate-limit mark per account.
+
 Examples:
 
 - Anthropic-family providers parse unified Anthropic rate-limit headers

@@ -126,4 +126,25 @@ describe("processProxyResponse", () => {
 			"updateAccountRateLimitMeta",
 		]);
 	});
+
+	it("skips the account-level mark for separately metered models", () => {
+		const account = createAccount();
+		const { ctx, calls, flush } = createContext({
+			isRateLimited: true,
+			statusHeader: "rate_limited",
+			resetTime: 1_710_000_000_000,
+			remaining: 0,
+		});
+
+		const isRateLimited = processProxyResponse(
+			new Response("rate limited", { status: 429 }),
+			account,
+			ctx,
+			{ skipAccountRateLimitMark: true },
+		);
+		flush();
+
+		expect(isRateLimited).toBe(true);
+		expect(calls).toEqual(["updateAccountRateLimitMeta"]);
+	});
 });

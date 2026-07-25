@@ -165,9 +165,18 @@ export class AccountRepository extends BaseRepository<Account> {
 	/**
 	 * Returns accounts available for routing: filters by provider and excludes
 	 * paused accounts and those currently rate-limited, all pushed into SQL.
+	 * `includeRateLimited` skips the rate-limit filter for models whose quota
+	 * is metered separately from the account-level mark (see the proxy
+	 * package's rate-limit exemptions).
 	 */
-	findAvailableForProvider(provider: Account["provider"]): Account[] {
+	findAvailableForProvider(
+		provider: Account["provider"],
+		includeRateLimited = false,
+	): Account[] {
 		const now = Date.now();
+		const rateLimitFilter = includeRateLimited
+			? ""
+			: "AND (rate_limited_until IS NULL OR rate_limited_until < ?)";
 		const rows = this.query<AccountRow>(
 			`
 			SELECT
@@ -175,9 +184,9 @@ export class AccountRepository extends BaseRepository<Account> {
 			FROM accounts
 			WHERE provider = ?
 				AND COALESCE(paused, 0) = 0
-				AND (rate_limited_until IS NULL OR rate_limited_until < ?)
+				${rateLimitFilter}
 		`,
-			[provider, now],
+			includeRateLimited ? [provider] : [provider, now],
 		);
 
 		return rows.map(toAccount);

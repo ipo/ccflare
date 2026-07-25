@@ -73,14 +73,19 @@ export function processProxyResponse(
 	response: Response,
 	account: Account,
 	ctx: ResolvedProxyContext,
+	options?: { skipAccountRateLimitMark?: boolean },
 ): boolean {
 	const isStream = ctx.provider.isStreamingResponse?.(response) ?? false;
 	// Parse rate-limit headers once and pass the result through
 	const rateLimitInfo = ctx.provider.parseRateLimit(response);
 
-	// Handle rate limit
+	// Handle rate limit. skipAccountRateLimitMark is used for models whose
+	// quota is metered separately: their 429 must not poison the
+	// account-level mark shared by the main meter.
 	if (!isStream && rateLimitInfo.isRateLimited) {
-		handleRateLimitResponse(account, rateLimitInfo, ctx);
+		if (!options?.skipAccountRateLimitMark) {
+			handleRateLimitResponse(account, rateLimitInfo, ctx);
+		}
 		updateAccountMetadata(account, rateLimitInfo, ctx);
 		return true; // Signal rate limit
 	}

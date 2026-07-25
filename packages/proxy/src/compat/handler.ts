@@ -13,6 +13,7 @@ import {
 import { processProxyResponse } from "../handlers/response-processor";
 import { getValidAccessToken } from "../handlers/token-manager";
 import type { ProxyContext } from "../proxy";
+import { isRateLimitExemptModel } from "../rate-limit-exemptions";
 import { forwardToClient } from "../response-handler";
 import { type StrippedModel, stripCompatibilityModelPrefix } from "./model-id";
 import { COMPAT_PROVIDER_ORDER, parseCompatibilityRoute } from "./route-parser";
@@ -257,7 +258,15 @@ async function tryProviderFamily(
 		plan.providerName,
 		plan.upstreamPath,
 	);
-	const accounts = selectAccountsForRequest(requestMeta, requestContext);
+	const accounts = selectAccountsForRequest(
+		requestMeta,
+		requestContext,
+		stripped.model,
+	);
+	const rateLimitExempt = isRateLimitExemptModel(
+		plan.providerName,
+		stripped.model,
+	);
 
 	if (accounts.length === 0) {
 		return null;
@@ -293,7 +302,19 @@ async function tryProviderFamily(
 				`Upstream ${actualProvider}/${account.name}: ${response.status} ${response.headers.get("content-type")}`,
 			);
 
-			if (processProxyResponse(response, account, requestContext)) {
+			if (
+				processProxyResponse(response, account, requestContext, {
+					skipAccountRateLimitMark: rateLimitExempt,
+				})
+			) {
+				// Surface the upstream rate-limit body instead of falling
+				// through to the opaque "no usable accounts" error.
+				const rateLimitedBody = await response.text();
+				lastErrorResponse = new Response(rateLimitedBody, {
+					status: response.status,
+					statusText: response.statusText,
+					headers: response.headers,
+				});
 				continue;
 			}
 
