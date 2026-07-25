@@ -8,30 +8,26 @@ import {
 	NotImplemented,
 } from "@ccflare/http";
 import { Logger } from "@ccflare/logger";
-import type { Provider, ProviderQuotaReport } from "@ccflare/providers";
+import type { Provider, ProviderModelsReport } from "@ccflare/providers";
 import { sanitizeQuotaData } from "@ccflare/providers";
 import type { Account, AccountProvider } from "@ccflare/types";
-import type { AccountQuotaResponse } from "../types";
+import type { AccountModelsResponse } from "../types";
 import {
 	createAccountCredentialRefresher,
 	needsTokenRefresh,
 } from "./account-credentials";
 
-const log = new Logger("AccountQuotaHandler");
-const QUOTA_PROVIDERS = new Set<AccountProvider>([
-	"claude-code",
-	"codex",
-	"kimi",
-]);
+const log = new Logger("AccountModelsHandler");
+const MODELS_PROVIDERS = new Set<AccountProvider>(["codex"]);
 
-function hasUnauthorizedSource(report: ProviderQuotaReport): boolean {
-	return Object.values(report.sources).some((source) => source.status === 401);
+function hasUnauthorizedVersion(report: ProviderModelsReport): boolean {
+	return report.versions.some((version) => version.status === 401);
 }
 
-function toQuotaResponse(
+function toModelsResponse(
 	account: Account,
-	report: ProviderQuotaReport,
-): AccountQuotaResponse {
+	report: ProviderModelsReport,
+): AccountModelsResponse {
 	return {
 		account: {
 			id: account.id,
@@ -40,17 +36,19 @@ function toQuotaResponse(
 		},
 		state: report.state,
 		collectedAt: report.collectedAt,
-		sources: sanitizeQuotaData(report.sources, [
+		versions: sanitizeQuotaData(report.versions, [
 			account.access_token ?? "",
 			account.refresh_token ?? "",
-		]) as AccountQuotaResponse["sources"],
+		]) as AccountModelsResponse["versions"],
 	};
 }
 
 /**
- * Fetch quota for one selected account without involving load balancing.
+ * Fetch the provider-native model catalog for one selected account without
+ * involving load balancing. Only Codex accounts are supported; every other
+ * provider returns 501 for now.
  */
-export function createAccountQuotaHandler(
+export function createAccountModelsHandler(
 	dbOps: DatabaseOperations,
 	config: Config,
 	getProvider: (provider: AccountProvider) => Provider | undefined,
@@ -63,20 +61,20 @@ export function createAccountQuotaHandler(
 			return errorResponse(NotFound("Account not found"));
 		}
 
-		if (!QUOTA_PROVIDERS.has(account.provider)) {
+		if (!MODELS_PROVIDERS.has(account.provider)) {
 			return errorResponse(
 				NotImplemented(
-					`Quota checks are not implemented for provider '${account.provider}'`,
+					`Model listing is not implemented for provider '${account.provider}'`,
 					{ provider: account.provider },
 				),
 			);
 		}
 
 		const provider = getProvider(account.provider);
-		if (!provider?.fetchQuota) {
+		if (!provider?.fetchModels) {
 			return errorResponse(
 				NotImplemented(
-					`Quota checks are not implemented for provider '${account.provider}'`,
+					`Model listing is not implemented for provider '${account.provider}'`,
 					{ provider: account.provider },
 				),
 			);
@@ -89,31 +87,31 @@ export function createAccountQuotaHandler(
 				refreshed = true;
 			}
 
-			let report = await provider.fetchQuota(account);
+			let report = await provider.fetchModels(account);
 			if (
 				!refreshed &&
 				report.state === "failed" &&
-				hasUnauthorizedSource(report)
+				hasUnauthorizedVersion(report)
 			) {
 				account = await refreshAccount(account, provider);
-				report = await provider.fetchQuota(account);
+				report = await provider.fetchModels(account);
 			}
 
-			const response = toQuotaResponse(account, report);
+			const response = toModelsResponse(account, report);
 			if (report.state === "failed") {
 				return errorResponse(
-					BadGateway("All provider quota sources failed", response),
+					BadGateway("All provider model catalog requests failed", response),
 				);
 			}
 
 			return jsonResponse(response);
 		} catch (error) {
 			log.error(
-				`Quota check failed for account ${account.id} (${account.provider})`,
+				`Model listing failed for account ${account.id} (${account.provider})`,
 				error instanceof Error ? error.name : "Unknown failure",
 			);
 			return errorResponse(
-				BadGateway("Failed to fetch account quota", {
+				BadGateway("Failed to fetch account models", {
 					account: {
 						id: account.id,
 						name: account.name,

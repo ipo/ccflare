@@ -183,6 +183,25 @@ response.
 only implements the OAuth subscription quota protocols used by Claude Code,
 Codex and Kimi.
 
+## Account Model Catalog Fetching
+
+`GET /api/accounts/:accountId/models` asks the selected provider
+implementation for its live model catalog using that account's OAuth
+credentials. This is also a control-plane operation and mirrors the quota
+endpoint's account lookup, token refresh, and error mapping.
+
+Only Codex is implemented. The Codex provider queries
+`GET <base>/models?client_version=<version>` once per known Codex CLI
+version (`0.145.0` and `0.144.1`), the same discovery endpoint the real
+Codex CLI uses. The response is tiered by client version, newest first:
+every model+effort combo advertised by a newer tier is culled from older
+tiers, so each older tier lists only the models or reasoning efforts that
+genuinely require that older client. Models known to exist but absent from
+the remote catalog (`codex-auto-review`) are appended to the newest
+successful tier with `"hidden": true`.
+
+All other providers return `501` for now.
+
 ## Rate Limit Handling
 
 Providers normalize native rate-limit signals into a shared shape consumed by the proxy/database layers.

@@ -29,6 +29,44 @@ export interface ProviderQuotaReport {
 	sources: Record<string, QuotaSourceResult>;
 }
 
+export interface ModelReasoningLevel {
+	effort: string;
+	description?: string;
+}
+
+export interface ProviderModelEntry {
+	slug: string;
+	displayName?: string;
+	description?: string;
+	defaultReasoningLevel?: string;
+	supportedReasoningLevels: ModelReasoningLevel[];
+	/** True for models known to exist but not advertised by the remote catalog. */
+	hidden?: boolean;
+}
+
+export type ModelCatalogState = "ok" | "failed";
+
+export interface ModelCatalogVersionResult {
+	clientVersion: string;
+	state: ModelCatalogState;
+	status?: number;
+	etag?: string;
+	error?: string;
+	models: ProviderModelEntry[];
+	/**
+	 * Number of model+effort combos removed from this tier because a newer
+	 * client-version tier already advertises them.
+	 */
+	culledCount?: number;
+}
+
+export interface ProviderModelsReport {
+	state: ProviderQuotaState;
+	collectedAt: string;
+	/** Ordered newest client version first; older tiers are culled of duplicates. */
+	versions: ModelCatalogVersionResult[];
+}
+
 export interface Provider {
 	name: string;
 	defaultBaseUrl: string;
@@ -53,6 +91,14 @@ export interface Provider {
 		account: Account,
 		fetchFn?: typeof globalThis.fetch,
 	): Promise<ProviderQuotaReport>;
+
+	/**
+	 * Fetch the provider-native model catalog for one OAuth account.
+	 */
+	fetchModels?(
+		account: Account,
+		fetchFn?: typeof globalThis.fetch,
+	): Promise<ProviderModelsReport>;
 
 	/**
 	 * Build the target URL for the provider

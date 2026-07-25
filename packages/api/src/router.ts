@@ -1,5 +1,6 @@
 import { validateNumber } from "@ccflare/core";
 import { errorResponse, NotFound } from "@ccflare/http";
+import { createAccountModelsHandler } from "./handlers/account-models";
 import { createAccountQuotaHandler } from "./handlers/account-quota";
 import {
 	createAccountAddHandler,
@@ -120,6 +121,11 @@ export class APIRouter {
 			config,
 			getProvider,
 		);
+		const accountModelsHandler = createAccountModelsHandler(
+			dbOps,
+			config,
+			getProvider,
+		);
 
 		// Pre-instantiate auth handlers
 		const authInitHandler = createAuthInitHandler(dbOps);
@@ -213,6 +219,11 @@ export class APIRouter {
 			"GET",
 			"/api/accounts/:accountId/quota",
 			(req, _url, params) => accountQuotaHandler(req, params.accountId),
+		);
+		this.addDynamicRoute(
+			"GET",
+			"/api/accounts/:accountId/models",
+			(req, _url, params) => accountModelsHandler(req, params.accountId),
 		);
 		this.addDynamicRoute(
 			"PATCH",

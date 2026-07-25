@@ -290,6 +290,99 @@ Quota windows change slowly. Poll no more often than every 5 minutes; every
 curl http://localhost:8080/api/accounts/uuid-here/quota
 ```
 
+#### GET /api/accounts/:accountId/models
+
+Fetch the live provider-native model catalog for one selected OAuth account.
+Like the quota endpoint, the account is addressed directly by its ccflare
+account ID; load balancing, paused state, and current inference rate-limit
+state do not affect which credentials are queried.
+
+Supported providers:
+
+- `codex` — queries `GET https://chatgpt.com/backend-api/codex/models?client_version=<version>`
+  once per known Codex CLI version (currently `0.145.0` and `0.144.1`),
+  mirroring how the real Codex CLI discovers its catalog
+
+All other providers return `501` with an explicit not-implemented message.
+
+The response is **tiered by client version**, newest first. The newest tier
+keeps its full catalog. Every model+effort combo that a newer tier also
+advertises is culled from older tiers (`culledCount` records how many), so an
+older tier only lists models — or individual reasoning efforts — that require
+that older client version. Models known to exist but not advertised by the
+remote catalog (currently `codex-auto-review`) are appended to the newest
+successful tier with `"hidden": true`.
+
+The handler refreshes missing, expired, expiry-less, or nearly expired OAuth
+credentials before querying. A fully unauthorized response also triggers one
+refresh-and-retry. Rotated tokens are persisted but are never included in the
+API response.
+
+**Response:**
+
+```json
+{
+  "account": {
+    "id": "uuid-here",
+    "name": "codex-main",
+    "provider": "codex"
+  },
+  "state": "ok",
+  "collectedAt": "2026-07-25T08:30:00.000Z",
+  "versions": [
+    {
+      "clientVersion": "0.145.0",
+      "state": "ok",
+      "status": 200,
+      "culledCount": 0,
+      "models": [
+        {
+          "slug": "gpt-5.5",
+          "displayName": "GPT-5.5",
+          "defaultReasoningLevel": "medium",
+          "supportedReasoningLevels": [
+            { "effort": "low", "description": "Fastest responses" },
+            { "effort": "medium" }
+          ]
+        },
+        {
+          "slug": "codex-auto-review",
+          "displayName": "Codex Auto Review",
+          "supportedReasoningLevels": [],
+          "hidden": true
+        }
+      ]
+    },
+    {
+      "clientVersion": "0.144.1",
+      "state": "ok",
+      "status": 200,
+      "culledCount": 2,
+      "models": [
+        {
+          "slug": "gpt-5.1-codex",
+          "supportedReasoningLevels": [{ "effort": "medium" }]
+        }
+      ]
+    }
+  ]
+}
+```
+
+`state` is `ok` when every version fetch succeeds, `partial` when at least
+one succeeds, and `failed` when every one fails. Partial reports return `200`;
+fully failed reports return `502` with the secret-safe report in `details`.
+Unknown account IDs return `404`.
+
+The catalog changes only when OpenAI ships model or client gating changes.
+Poll no more often than every 15 minutes.
+
+**Example:**
+
+```bash
+curl http://localhost:8080/api/accounts/uuid-here/models
+```
+
 ---
 
 ### Auth Flow

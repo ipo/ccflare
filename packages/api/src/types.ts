@@ -1,6 +1,7 @@
 import type { Config } from "@ccflare/config";
 import type { DatabaseOperations } from "@ccflare/database";
 import type {
+	ModelCatalogVersionResult,
 	Provider,
 	ProviderQuotaState,
 	QuotaSourceResult,
@@ -48,6 +49,17 @@ export interface AccountQuotaResponse {
 	state: ProviderQuotaState;
 	collectedAt: string;
 	sources: Record<string, QuotaSourceResult>;
+}
+
+export interface AccountModelsResponse {
+	account: {
+		id: string;
+		name: string;
+		provider: AccountProvider;
+	};
+	state: ProviderQuotaState;
+	collectedAt: string;
+	versions: ModelCatalogVersionResult[];
 }
 
 export interface APIContext {

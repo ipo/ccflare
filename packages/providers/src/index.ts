@@ -2,9 +2,10 @@
 
 // Export base provider class
 export { BaseProvider } from "./base";
+// Export providers
+export * from "./models";
 // Export OAuth utilities
 export * from "./oauth";
-// Export providers
 export * from "./providers/index";
 export * from "./quota";
 // Export registry functions

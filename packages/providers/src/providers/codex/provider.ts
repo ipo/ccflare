@@ -1,12 +1,18 @@
 import { Logger } from "@ccflare/logger";
 import { type Account, getProviderDefaultBaseUrl } from "@ccflare/types";
 import { deleteTransportHeaders } from "../../base";
+import { collectModelCatalog } from "../../models";
 import { collectQuotaSources } from "../../quota";
 import {
 	executeTokenRefresh,
 	type RefreshRequestConfig,
 } from "../../token-refresh";
-import type { ProviderQuotaReport, TokenRefreshResult } from "../../types";
+import type {
+	ProviderModelEntry,
+	ProviderModelsReport,
+	ProviderQuotaReport,
+	TokenRefreshResult,
+} from "../../types";
 import {
 	OPENAI_OAUTH_CLIENT_ID,
 	OPENAI_OAUTH_TOKEN_URL,
@@ -20,6 +26,26 @@ import { CodexOAuthProvider } from "./oauth";
 
 const CODEX_CLIENT_VERSION = "0.144.1";
 const CODEX_USER_AGENT = `codex_cli_rs/${CODEX_CLIENT_VERSION} (Mac OS; arm64)`;
+/**
+ * Newest Codex CLI version whose model catalog we query, ordered newest
+ * first. Older tiers are culled of model+effort combos that a newer tier
+ * already advertises.
+ */
+const CODEX_MODELS_CLIENT_VERSIONS = ["0.145.0", CODEX_CLIENT_VERSION];
+/**
+ * Model Codex uses for unattended code review. The remote catalog does not
+ * advertise it, so it is surfaced as a hidden model when absent.
+ */
+const CODEX_HIDDEN_MODELS: ProviderModelEntry[] = [
+	{
+		slug: "codex-auto-review",
+		displayName: "Codex Auto Review",
+		description:
+			"Internal model Codex uses for unattended code review; not advertised by the remote catalog.",
+		supportedReasoningLevels: [],
+		hidden: true,
+	},
+];
 const log = new Logger("CodexProvider");
 const PROVIDER_NAME = "codex" as const;
 const DEFAULT_BASE_URL = getProviderDefaultBaseUrl(PROVIDER_NAME);
@@ -103,6 +129,44 @@ export class CodexProvider extends OpenAIProvider {
 		_clientId: string,
 	): Promise<TokenRefreshResult> {
 		return executeTokenRefresh(account, _clientId, CODEX_REFRESH_CONFIG, log);
+	}
+
+	async fetchModels(
+		account: Account,
+		fetchFn: typeof globalThis.fetch = globalThis.fetch,
+	): Promise<ProviderModelsReport> {
+		if (!account.access_token) {
+			throw new Error(
+				`No access token available for Codex account ${account.name}`,
+			);
+		}
+
+		const baseUrl = (account.base_url ?? DEFAULT_BASE_URL).replace(/\/+$/, "");
+		const remoteAccountId = decodeCodexAccountId(account.access_token);
+		const versions = [...new Set(CODEX_MODELS_CLIENT_VERSIONS)];
+
+		return collectModelCatalog(
+			versions.map((clientVersion) => ({
+				clientVersion,
+				url: `${baseUrl}/models?client_version=${clientVersion}`,
+			})),
+			(clientVersion) => {
+				const headers: Record<string, string> = {
+					Authorization: `Bearer ${account.access_token}`,
+					Accept: "application/json",
+					originator: "codex_cli_rs",
+					"User-Agent": `codex_cli_rs/${clientVersion} (Mac OS; arm64)`,
+					Version: clientVersion,
+				};
+				if (remoteAccountId) {
+					headers["ChatGPT-Account-Id"] = remoteAccountId;
+				}
+				return headers;
+			},
+			fetchFn,
+			[account.access_token],
+			CODEX_HIDDEN_MODELS,
+		);
 	}
 
 	async fetchQuota(

@@ -198,4 +198,167 @@ describe("CodexProvider", () => {
 			remaining: undefined,
 		});
 	});
+
+	it("fetches tiered model catalogs and culls combos advertised by newer versions", async () => {
+		const requests: Request[] = [];
+		const accessToken = createCodexJwt("remote-account-123");
+		const fetchFn = createQuotaFetchMock((request) => {
+			requests.push(request);
+			if (request.url.includes("client_version=0.145.0")) {
+				return Response.json({
+					models: [
+						{
+							slug: "gpt-5.5",
+							display_name: "GPT-5.5",
+							default_reasoning_level: "medium",
+							supported_reasoning_levels: [
+								{ effort: "low", description: "Fast" },
+								{ effort: "medium" },
+								{ effort: "high" },
+								{ effort: "xhigh" },
+							],
+						},
+						{
+							slug: "codex-auto-review",
+							supported_reasoning_levels: [{ effort: "medium" }],
+						},
+					],
+				});
+			}
+			if (request.url.includes("client_version=0.144.1")) {
+				return Response.json({
+					models: [
+						{
+							slug: "gpt-5.5",
+							supported_reasoning_levels: [
+								{ effort: "minimal" },
+								{ effort: "low" },
+								{ effort: "medium" },
+								{ effort: "high" },
+							],
+						},
+						{
+							slug: "gpt-5.1-codex",
+							supported_reasoning_levels: [
+								{ effort: "low" },
+								{ effort: "medium" },
+							],
+						},
+					],
+				});
+			}
+			return Response.json({ error: "unexpected URL" }, { status: 500 });
+		});
+
+		const report = await provider.fetchModels(
+			createOAuthAccount("codex", { access_token: accessToken }),
+			fetchFn,
+		);
+
+		expect(report.state).toBe("ok");
+		expect(requests.map((request) => request.url)).toEqual([
+			"https://chatgpt.com/backend-api/codex/models?client_version=0.145.0",
+			"https://chatgpt.com/backend-api/codex/models?client_version=0.144.1",
+		]);
+		for (const request of requests) {
+			expect(request.headers.get("authorization")).toBe(
+				`Bearer ${accessToken}`,
+			);
+			expect(request.headers.get("chatgpt-account-id")).toBe(
+				"remote-account-123",
+			);
+			expect(request.headers.get("originator")).toBe("codex_cli_rs");
+		}
+
+		const [latest, older] = report.versions;
+		expect(latest.clientVersion).toBe("0.145.0");
+		expect(latest.culledCount).toBe(0);
+		expect(latest.models.map((model) => model.slug)).toEqual([
+			"gpt-5.5",
+			"codex-auto-review",
+		]);
+		// Catalog advertised codex-auto-review: no hidden duplicate is added.
+		expect(
+			latest.models.filter((model) => model.slug === "codex-auto-review"),
+		).toHaveLength(1);
+
+		expect(older.clientVersion).toBe("0.144.1");
+		expect(older.culledCount).toBe(3);
+		expect(older.models).toEqual([
+			{
+				slug: "gpt-5.5",
+				supportedReasoningLevels: [{ effort: "minimal" }],
+			},
+			{
+				slug: "gpt-5.1-codex",
+				supportedReasoningLevels: [{ effort: "low" }, { effort: "medium" }],
+			},
+		]);
+		expect(JSON.stringify(report)).not.toContain(accessToken);
+	});
+
+	it("adds codex-auto-review as a hidden model when the catalog omits it", async () => {
+		const fetchFn = createQuotaFetchMock(() =>
+			Response.json({
+				models: [
+					{
+						slug: "gpt-5.5",
+						supported_reasoning_levels: [{ effort: "medium" }],
+					},
+				],
+			}),
+		);
+
+		const report = await provider.fetchModels(
+			createOAuthAccount("codex"),
+			fetchFn,
+		);
+
+		expect(report.state).toBe("ok");
+		const latest = report.versions[0];
+		const hidden = latest.models.find(
+			(model) => model.slug === "codex-auto-review",
+		);
+		expect(hidden).toEqual(
+			expect.objectContaining({
+				slug: "codex-auto-review",
+				hidden: true,
+				supportedReasoningLevels: [],
+			}),
+		);
+		// The older tier is fully culled: identical gpt-5.5/medium combo.
+		expect(report.versions[1].models).toEqual([]);
+		expect(report.versions[1].culledCount).toBe(1);
+	});
+
+	it("reports partial state and per-version errors when one catalog fails", async () => {
+		const fetchFn = createQuotaFetchMock((request) => {
+			if (request.url.includes("client_version=0.145.0")) {
+				return Response.json({
+					models: [
+						{
+							slug: "gpt-5.5",
+							supported_reasoning_levels: [{ effort: "medium" }],
+						},
+					],
+				});
+			}
+			return Response.json({ error: "denied" }, { status: 401 });
+		});
+
+		const report = await provider.fetchModels(
+			createOAuthAccount("codex"),
+			fetchFn,
+		);
+
+		expect(report.state).toBe("partial");
+		expect(report.versions[0].state).toBe("ok");
+		expect(report.versions[1]).toEqual(
+			expect.objectContaining({
+				state: "failed",
+				status: 401,
+				models: [],
+			}),
+		);
+	});
 });

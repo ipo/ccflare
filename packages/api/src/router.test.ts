@@ -997,6 +997,172 @@ describe("APIRouter", () => {
 		expect(JSON.stringify(body)).not.toContain("valid-access-token");
 	});
 
+	it("fetches tiered Codex models after refreshing expired credentials", async () => {
+		const { router, dbOps } = createRouterContext();
+		const account = dbOps.createOAuthAccount({
+			name: "models-owner",
+			provider: "codex",
+			accessToken: "expired-access-token",
+			refreshToken: "rotating-refresh-token",
+			expiresAt: Date.now() - 1,
+		});
+		const requestedUrls: string[] = [];
+
+		installFetchMock(async (request) => {
+			requestedUrls.push(request.url);
+			if (request.url === "https://auth.openai.com/oauth/token") {
+				expect(await request.text()).toContain(
+					"refresh_token=rotating-refresh-token",
+				);
+				return Response.json({
+					access_token: "fresh-access-token",
+					refresh_token: "fresh-refresh-token",
+					expires_in: 3600,
+				});
+			}
+			if (request.url.includes("/codex/models")) {
+				expect(request.headers.get("authorization")).toBe(
+					"Bearer fresh-access-token",
+				);
+				return Response.json({
+					models: [
+						{
+							slug: "gpt-5.5",
+							display_name: "GPT-5.5",
+							supported_reasoning_levels: [
+								{ effort: "low" },
+								{ effort: "medium" },
+								{ effort: "high" },
+							],
+						},
+					],
+				});
+			}
+			return Response.json({ error: "unexpected URL" }, { status: 500 });
+		});
+
+		const response = await apiRequest(
+			router,
+			"GET",
+			`/api/accounts/${account.id}/models`,
+		);
+		expect(response.status).toBe(200);
+		const body = (await response.json()) as {
+			account: { id: string; provider: string };
+			state: string;
+			versions: Array<{
+				clientVersion: string;
+				state: string;
+				culledCount?: number;
+				models: Array<{ slug: string; hidden?: boolean }>;
+			}>;
+		};
+		expect(body).toEqual(
+			expect.objectContaining({
+				account: expect.objectContaining({
+					id: account.id,
+					provider: "codex",
+				}),
+				state: "ok",
+			}),
+		);
+		expect(body.versions.map((version) => version.clientVersion)).toEqual([
+			"0.145.0",
+			"0.144.1",
+		]);
+		const [latest, older] = body.versions;
+		expect(latest.models.map((model) => model.slug)).toEqual([
+			"gpt-5.5",
+			"codex-auto-review",
+		]);
+		expect(
+			latest.models.find((model) => model.slug === "codex-auto-review")?.hidden,
+		).toBe(true);
+		// Older tier is fully culled: identical gpt-5.5 effort combos.
+		expect(older.models).toEqual([]);
+		expect(older.culledCount).toBe(3);
+		expect(requestedUrls).toEqual([
+			"https://auth.openai.com/oauth/token",
+			"https://chatgpt.com/backend-api/codex/models?client_version=0.145.0",
+			"https://chatgpt.com/backend-api/codex/models?client_version=0.144.1",
+		]);
+		expect(dbOps.getAccount(account.id)).toEqual(
+			expect.objectContaining({
+				access_token: "fresh-access-token",
+				refresh_token: "fresh-refresh-token",
+			}),
+		);
+		const serialized = JSON.stringify(body);
+		expect(serialized).not.toContain("fresh-access-token");
+		expect(serialized).not.toContain("fresh-refresh-token");
+	});
+
+	it("returns explicit account models errors for missing and unsupported accounts", async () => {
+		const { router, dbOps } = createRouterContext();
+		const missingResponse = await apiRequest(
+			router,
+			"GET",
+			"/api/accounts/missing-account/models",
+		);
+		expect(missingResponse.status).toBe(404);
+		expect(await missingResponse.json()).toEqual({
+			error: "Account not found",
+		});
+
+		const claudeAccount = dbOps.createOAuthAccount({
+			name: "unsupported-models-owner",
+			provider: "claude-code",
+			accessToken: "valid-access-token",
+			refreshToken: "valid-refresh-token",
+			expiresAt: Date.now() + 60_000,
+		});
+		const unsupportedResponse = await apiRequest(
+			router,
+			"GET",
+			`/api/accounts/${claudeAccount.id}/models`,
+		);
+		expect(unsupportedResponse.status).toBe(501);
+		expect(await unsupportedResponse.json()).toEqual({
+			error: "Model listing is not implemented for provider 'claude-code'",
+			details: { provider: "claude-code" },
+		});
+	});
+
+	it("returns 502 with secret-safe details when every model catalog request fails", async () => {
+		const { router, dbOps } = createRouterContext();
+		const account = dbOps.createOAuthAccount({
+			name: "unavailable-models-owner",
+			provider: "codex",
+			accessToken: "valid-access-token",
+			refreshToken: "valid-refresh-token",
+			expiresAt: Date.now() + 60_000,
+		});
+		installFetchMock(() =>
+			Response.json(
+				{
+					error: "upstream unavailable",
+					access_token: "upstream-secret",
+				},
+				{ status: 503 },
+			),
+		);
+
+		const response = await apiRequest(
+			router,
+			"GET",
+			`/api/accounts/${account.id}/models`,
+		);
+		expect(response.status).toBe(502);
+		const body = (await response.json()) as {
+			error: string;
+			details: { state: string };
+		};
+		expect(body.error).toBe("All provider model catalog requests failed");
+		expect(body.details.state).toBe("failed");
+		expect(JSON.stringify(body)).not.toContain("upstream-secret");
+		expect(JSON.stringify(body)).not.toContain("valid-access-token");
+	});
+
 	it("resets stats consistently through the API", async () => {
 		const { router, dbOps } = createRouterContext();
 		const account = dbOps.createAccount({
