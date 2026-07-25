@@ -51,7 +51,8 @@ describe("CodexProvider", () => {
 
 		expect(headers.get("authorization")).toBe("Bearer codex-access-token");
 		expect(headers.get("originator")).toBe("codex_cli_rs");
-		expect(headers.get("user-agent")).toContain("codex_cli_rs/");
+		expect(headers.get("version")).toBe("0.144.1");
+		expect(headers.get("user-agent")).toContain("codex_cli_rs/0.144.1");
 		expect(headers.get("user-agent")).toContain("arm64");
 		expectRemovedHeaders(headers, [
 			"x-api-key",

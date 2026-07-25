@@ -60,9 +60,12 @@ export function applyClaudeCodeShaping(request: JsonRecord): JsonRecord {
 		const prefix = systemText.trim();
 		if (prefix && firstUserIdx >= 0) {
 			const firstUser = messages[firstUserIdx];
-			const currentContent = Array.isArray(firstUser.content)
-				? (firstUser.content as JsonRecord[])
-				: [];
+			const currentContent =
+				typeof firstUser.content === "string"
+					? [buildAnthropicTextBlock(firstUser.content)]
+					: Array.isArray(firstUser.content)
+						? (firstUser.content as JsonRecord[])
+						: [];
 			const newMessages = messages.slice();
 			newMessages[firstUserIdx] = {
 				...firstUser,

@@ -307,7 +307,7 @@ describe("handleCompatibilityProxy", () => {
 		]);
 	});
 
-	it("applies Claude Code shaping when claude-code is selected", async () => {
+	it("accepts the Anthropic SDK messages path and applies Claude Code shaping", async () => {
 		let seenBody: Record<string, unknown> | null = null;
 		globalThis.fetch = Object.assign(
 			async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -337,7 +337,7 @@ describe("handleCompatibilityProxy", () => {
 		) as typeof fetch;
 
 		const response = await handleCompatibilityProxy(
-			new Request("http://localhost:8080/v1/ccflare/anthropic/messages", {
+			new Request("http://localhost:8080/v1/ccflare/anthropic/v1/messages", {
 				method: "POST",
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify({
@@ -347,7 +347,7 @@ describe("handleCompatibilityProxy", () => {
 					messages: [{ role: "user", content: "hi" }],
 				}),
 			}),
-			new URL("http://localhost:8080/v1/ccflare/anthropic/messages"),
+			new URL("http://localhost:8080/v1/ccflare/anthropic/v1/messages"),
 			createProxyContext({
 				"claude-code": [createOAuthAccount("claude-code")],
 			}),

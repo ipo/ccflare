@@ -17,7 +17,7 @@ import {
 } from "../openai/provider";
 import { CodexOAuthProvider } from "./oauth";
 
-const CODEX_CLIENT_VERSION = "0.118.0";
+const CODEX_CLIENT_VERSION = "0.144.1";
 const CODEX_USER_AGENT = `codex_cli_rs/${CODEX_CLIENT_VERSION} (Mac OS; arm64)`;
 const log = new Logger("CodexProvider");
 const PROVIDER_NAME = "codex" as const;

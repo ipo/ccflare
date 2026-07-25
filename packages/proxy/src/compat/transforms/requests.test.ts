@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import {
+	applyClaudeCodeShaping,
 	convertAnthropicRequestToOpenAIChat,
 	convertAnthropicRequestToOpenAIResponses,
 	convertOpenAIChatRequestToAnthropic,
@@ -8,6 +9,23 @@ import {
 } from "./requests";
 
 describe("compat request transforms", () => {
+	it("preserves string-typed user content when applying Claude Code shaping", () => {
+		const output = applyClaudeCodeShaping({
+			system: "Follow the repo conventions.",
+			messages: [{ role: "user", content: "Keep this request intact." }],
+		});
+
+		expect(output.messages).toEqual([
+			{
+				role: "user",
+				content: [
+					{ type: "text", text: "Follow the repo conventions." },
+					{ type: "text", text: "Keep this request intact." },
+				],
+			},
+		]);
+	});
+
 	it("keeps malformed tool_result payloads valid when converting anthropic to openai chat", () => {
 		const output = convertAnthropicRequestToOpenAIChat(
 			{
