@@ -21,7 +21,7 @@ export function getOrderedAccounts(
 		ctx.providerName,
 		{ includeRateLimited },
 	);
-	return ctx.strategy.select(providerAccounts, meta);
+	return ctx.strategy.select(providerAccounts, meta, { includeRateLimited });
 }
 
 /**

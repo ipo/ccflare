@@ -214,7 +214,9 @@ meter. The proxy keeps an exemption list (suffix-matched, currently
 `*-codex-spark` on `codex`) with two effects:
 
 - Account selection ignores the account-level `rate_limited_until` mark for
-  exempt models, so main-meter exhaustion does not block them.
+  exempt models, so main-meter exhaustion does not block them. The flag is
+  threaded through both the accounts query and the load-balancing strategy,
+  which applies its own availability filter.
 - A 429 on an exempt model does not set the account-level mark, so a full
   Spark meter cannot poison main-meter models either. The upstream 429 body
   is forwarded to the client in that case.

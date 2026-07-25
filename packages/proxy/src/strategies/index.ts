@@ -46,8 +46,18 @@ export class SessionStrategy implements LoadBalancingStrategy {
 		}
 	}
 
-	select(accounts: Account[], _meta: RequestMeta): Account[] {
+	select(
+		accounts: Account[],
+		_meta: RequestMeta,
+		options?: { includeRateLimited?: boolean },
+	): Account[] {
 		const now = Date.now();
+		// Separately metered models (rate-limit exemptions) bypass the
+		// account-level rate-limit mark; paused accounts are always excluded.
+		const isUsable = (account: Account): boolean =>
+			options?.includeRateLimited
+				? !account.paused
+				: isAccountAvailable(account, now);
 
 		// Find account with active session (most recent session_start within window)
 		let activeAccount: Account | null = null;
@@ -65,7 +75,7 @@ export class SessionStrategy implements LoadBalancingStrategy {
 		}
 
 		// If we have an active account and it's available, use it exclusively
-		if (activeAccount && isAccountAvailable(activeAccount, now)) {
+		if (activeAccount && isUsable(activeAccount)) {
 			// Reset session if expired (shouldn't happen but just in case)
 			this.resetSessionIfExpired(activeAccount);
 			this.log.info(
@@ -73,14 +83,14 @@ export class SessionStrategy implements LoadBalancingStrategy {
 			);
 			// Return active account first, then others as fallback
 			const others = accounts.filter(
-				(a) => a.id !== activeAccount.id && isAccountAvailable(a, now),
+				(a) => a.id !== activeAccount.id && isUsable(a),
 			);
 			return [activeAccount, ...others];
 		}
 
 		// No active session or active account is rate limited
 		// Filter available accounts
-		const available = accounts.filter((a) => isAccountAvailable(a, now));
+		const available = accounts.filter((a) => isUsable(a));
 
 		if (available.length === 0) return [];
 

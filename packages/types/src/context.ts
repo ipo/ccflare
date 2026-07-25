@@ -6,10 +6,16 @@ import type { StrategyStore } from "./strategy";
 export interface LoadBalancingStrategy {
 	/**
 	 * Return a filtered & ordered list of candidate accounts.
-	 * Accounts that are rate-limited should be filtered out.
+	 * Accounts that are rate-limited should be filtered out, unless
+	 * `options.includeRateLimited` is set for models whose quota is
+	 * metered separately from the account-level rate-limit mark.
 	 * The first account in the list should be tried first.
 	 */
-	select(accounts: Account[], meta: RequestMeta): Account[];
+	select(
+		accounts: Account[],
+		meta: RequestMeta,
+		options?: { includeRateLimited?: boolean },
+	): Account[];
 
 	/**
 	 * Optional initialization method to inject dependencies
