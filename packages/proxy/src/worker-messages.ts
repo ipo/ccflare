@@ -14,6 +14,7 @@ export interface StartMessage {
 	messageId?: string;
 	requestId: string;
 	accountId: string | null;
+	accountName: string | null;
 	method: HttpMethod;
 	path: string;
 	upstreamPath: string;

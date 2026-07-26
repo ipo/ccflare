@@ -82,6 +82,7 @@ export async function forwardToClient(
 		type: "start",
 		requestId,
 		accountId: account?.id || null,
+		accountName: account?.name ?? null,
 		method,
 		path,
 		upstreamPath: ctx.upstreamPath,
@@ -109,6 +110,7 @@ export async function forwardToClient(
 		method,
 		path,
 		accountId: account?.id || null,
+		accountName: account?.name ?? null,
 		statusCode: response.status,
 		clientSessionId: extractClientSessionIdFromHeaders(requestHeadersObj),
 	});

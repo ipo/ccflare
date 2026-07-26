@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { requestEvents } from "@ccflare/core";
 import type { Account } from "@ccflare/types";
 import { waitForProxyBackgroundTasks } from "./background-tasks";
 import type { ResolvedProxyContext } from "./handlers";
@@ -97,5 +98,63 @@ describe("forwardToClient", () => {
 		) as { preExtractedModel?: string } | undefined;
 
 		expect(endMessage?.preExtractedModel).toBe("claude-sonnet-4");
+	});
+
+	it("includes the account name in the worker start message and start event", async () => {
+		const messages: unknown[] = [];
+		const events: unknown[] = [];
+		const listener = (event: unknown) => events.push(event);
+		requestEvents.on("event", listener);
+		try {
+			const account = {
+				id: "account-1",
+				name: "Primary account",
+			} as Account;
+			const response = await forwardToClient(
+				{
+					requestId: "req-named",
+					method: "POST",
+					path: "/v1/ccflare/openai/responses",
+					account,
+					requestHeaders: new Headers({
+						"content-type": "application/json",
+					}),
+					requestBody: null,
+					response: new Response(JSON.stringify({ ok: true }), {
+						status: 200,
+						headers: { "content-type": "application/json" },
+					}),
+					timestamp: Date.now(),
+					retryAttempt: 0,
+					failoverAttempts: 0,
+				},
+				createResolvedProxyContext(messages),
+			);
+
+			expect(response.status).toBe(200);
+			await waitForProxyBackgroundTasks();
+
+			const startMessage = messages.find(
+				(message) =>
+					typeof message === "object" &&
+					message !== null &&
+					"type" in message &&
+					message.type === "start",
+			) as { accountId?: string; accountName?: string } | undefined;
+			expect(startMessage?.accountId).toBe("account-1");
+			expect(startMessage?.accountName).toBe("Primary account");
+
+			const startEvent = events.find(
+				(event) =>
+					typeof event === "object" &&
+					event !== null &&
+					"type" in event &&
+					event.type === "start",
+			) as { accountId?: string; accountName?: string } | undefined;
+			expect(startEvent?.accountId).toBe("account-1");
+			expect(startEvent?.accountName).toBe("Primary account");
+		} finally {
+			requestEvents.off("event", listener);
+		}
 	});
 });

@@ -233,6 +233,7 @@ function emitTurnStartEvent(
 		method: "WS",
 		path: session.path,
 		accountId: session.connectedAccount?.id ?? null,
+		accountName: session.connectedAccount?.name ?? null,
 		statusCode: 101,
 		clientSessionId: extractClientSessionIdFromHeaders(session.requestHeaders),
 	});
@@ -296,6 +297,7 @@ function startActiveTurn(
 		type: "start",
 		requestId,
 		accountId: session.connectedAccount?.id ?? null,
+		accountName: session.connectedAccount?.name ?? null,
 		method: "WS",
 		path: session.path,
 		upstreamPath: session.upstreamPath,

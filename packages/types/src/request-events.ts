@@ -24,6 +24,7 @@ export interface RequestStartEvent {
 	method: HttpMethod;
 	path: string;
 	accountId: string | null;
+	accountName?: string | null;
 	statusCode: number;
 	clientSessionId?: string | null;
 }
@@ -73,6 +74,7 @@ export function isRequestStreamEvent(
 				isHttpMethod(value.method) &&
 				typeof value.path === "string" &&
 				(value.accountId === null || typeof value.accountId === "string") &&
+				isOptionalNullableString(value.accountName) &&
 				isFiniteNumber(value.statusCode) &&
 				isOptionalNullableString(value.clientSessionId)
 			);

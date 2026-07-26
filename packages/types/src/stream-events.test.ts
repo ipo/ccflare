@@ -52,6 +52,46 @@ describe("stream event validation", () => {
 			}),
 		).toBeNull();
 
+		// accountName is optional for server/dashboard version compatibility
+		expect(
+			parseRequestStreamEvent({
+				type: "start",
+				id: "request-3",
+				timestamp: 124,
+				method: "POST",
+				path: "/v1/openai/responses",
+				accountId: "account-1",
+				accountName: "Primary account",
+				statusCode: 200,
+			}),
+		).toMatchObject({ accountName: "Primary account" });
+
+		expect(
+			parseRequestStreamEvent({
+				type: "start",
+				id: "request-4",
+				timestamp: 125,
+				method: "POST",
+				path: "/v1/openai/responses",
+				accountId: null,
+				accountName: null,
+				statusCode: 200,
+			}),
+		).toMatchObject({ accountName: null });
+
+		expect(
+			parseRequestStreamEvent({
+				type: "start",
+				id: "request-5",
+				timestamp: 126,
+				method: "POST",
+				path: "/v1/openai/responses",
+				accountId: null,
+				accountName: 42,
+				statusCode: 200,
+			}),
+		).toBeNull();
+
 		expect(
 			parseRequestStreamEvent({
 				type: "ingress",

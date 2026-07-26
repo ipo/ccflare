@@ -17,6 +17,7 @@ function createStartMessage(): StartMessage {
 		type: "start",
 		requestId: "req-1",
 		accountId: "account-1",
+		accountName: "Primary account",
 		method: "POST",
 		path: "/v1/openai/responses",
 		upstreamPath: "/responses",

@@ -159,7 +159,7 @@ export function useRequestsPageModel(limit = 200, sessionId?: string) {
 									},
 									account: {
 										id: evt.accountId,
-										name: account?.name,
+										name: evt.accountName ?? account?.name,
 									},
 									transport: {
 										success: false,

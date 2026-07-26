@@ -760,6 +760,9 @@ async function handleEnd(msg: EndMessage): Promise<void> {
 			},
 			account: {
 				id: startMessage.accountId,
+				...(startMessage.accountName != null
+					? { name: startMessage.accountName }
+					: {}),
 			},
 			transport: {
 				success: msg.success,
@@ -838,7 +841,7 @@ async function handleEnd(msg: EndMessage): Promise<void> {
 		provider: startMessage.providerName,
 		upstreamPath: startMessage.upstreamPath,
 		accountUsed: startMessage.accountId,
-		accountName: null,
+		accountName: startMessage.accountName ?? null,
 		statusCode: startMessage.responseStatus,
 		success: msg.success,
 		errorMessage: msg.error || null,
