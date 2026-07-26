@@ -281,6 +281,12 @@ export class AccountRepository extends BaseRepository<Account> {
 		]);
 	}
 
+	clearRateLimited(accountId: string): void {
+		this.run(`UPDATE accounts SET rate_limited_until = NULL WHERE id = ?`, [
+			accountId,
+		]);
+	}
+
 	updateRateLimitMeta(
 		accountId: string,
 		status: string,

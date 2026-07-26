@@ -170,6 +170,10 @@ export class DatabaseOperations implements StrategyStore, Disposable {
 		this.accounts.setRateLimited(accountId, until);
 	}
 
+	clearAccountRateLimit(accountId: string): void {
+		this.accounts.clearRateLimited(accountId);
+	}
+
 	updateAccountRateLimitMeta(
 		accountId: string,
 		status: string,
