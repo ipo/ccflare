@@ -38,7 +38,7 @@ function upsertRequest(
  *
  * Components receive shaped data and call actions. No transport logic leaks.
  */
-export function useRequestsPageModel(limit = 200) {
+export function useRequestsPageModel(limit = 200, sessionId?: string) {
 	const queryClient = useQueryClient();
 	const [accountFilter, setAccountFilter] = useState<string>("all");
 	const [dateFrom, setDateFrom] = useState<string>("");
@@ -117,6 +117,7 @@ export function useRequestsPageModel(limit = 200) {
 										timestamp: evt.timestamp,
 										path: evt.path,
 										method: evt.method,
+										clientSessionId: evt.clientSessionId ?? null,
 									},
 									account: {
 										id: null,
@@ -154,6 +155,7 @@ export function useRequestsPageModel(limit = 200) {
 										timestamp: evt.timestamp,
 										path: evt.path,
 										method: evt.method,
+										clientSessionId: evt.clientSessionId ?? null,
 									},
 									account: {
 										id: evt.accountId,
@@ -255,6 +257,10 @@ export function useRequestsPageModel(limit = 200) {
 		),
 	).sort((left, right) => left - right);
 	const requests = allRequests.filter((request) => {
+		if (sessionId && request.meta?.trace?.clientSessionId !== sessionId) {
+			return false;
+		}
+
 		if (accountFilter !== "all") {
 			const requestAccount =
 				request.meta?.account?.name || request.meta?.account?.id;

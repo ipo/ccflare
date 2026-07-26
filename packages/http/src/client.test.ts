@@ -71,8 +71,8 @@ describe("HttpClient", () => {
 
 	it("preserves an explicit zero retry delay", () => {
 		const client = new TestHttpClient({ retryDelay: 0 });
-		expect((client as unknown as HttpClientWithOptions).options.retryDelay).toBe(
-			0,
-		);
+		expect(
+			(client as unknown as HttpClientWithOptions).options.retryDelay,
+		).toBe(0);
 	});
 });

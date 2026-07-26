@@ -2,6 +2,7 @@ import { requestEvents } from "@ccflare/core";
 import { sanitizeRequestHeaders } from "@ccflare/http";
 import { Logger } from "@ccflare/logger";
 import type { Account, AccountProvider } from "@ccflare/types";
+import { extractClientSessionIdFromHeaders } from "@ccflare/types";
 import { selectAccountsForRequest } from "./handlers/account-selector";
 import type {
 	ProxyContext,
@@ -233,6 +234,7 @@ function emitTurnStartEvent(
 		path: session.path,
 		accountId: session.connectedAccount?.id ?? null,
 		statusCode: 101,
+		clientSessionId: extractClientSessionIdFromHeaders(session.requestHeaders),
 	});
 }
 

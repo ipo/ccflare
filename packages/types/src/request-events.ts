@@ -14,6 +14,7 @@ export interface RequestIngressEvent {
 	timestamp: number;
 	method: HttpMethod;
 	path: string;
+	clientSessionId?: string | null;
 }
 
 export interface RequestStartEvent {
@@ -24,6 +25,7 @@ export interface RequestStartEvent {
 	path: string;
 	accountId: string | null;
 	statusCode: number;
+	clientSessionId?: string | null;
 }
 
 export interface RequestSummaryEvent {
@@ -42,6 +44,10 @@ export type RequestStreamEvent =
 	| RequestSummaryEvent
 	| RequestPayloadEvent;
 
+function isOptionalNullableString(value: unknown): boolean {
+	return value === undefined || value === null || typeof value === "string";
+}
+
 export function isRequestStreamEvent(
 	value: unknown,
 ): value is RequestStreamEvent {
@@ -56,7 +62,8 @@ export function isRequestStreamEvent(
 				isFiniteNumber(value.timestamp) &&
 				typeof value.method === "string" &&
 				isHttpMethod(value.method) &&
-				typeof value.path === "string"
+				typeof value.path === "string" &&
+				isOptionalNullableString(value.clientSessionId)
 			);
 		case "start":
 			return (
@@ -66,7 +73,8 @@ export function isRequestStreamEvent(
 				isHttpMethod(value.method) &&
 				typeof value.path === "string" &&
 				(value.accountId === null || typeof value.accountId === "string") &&
-				isFiniteNumber(value.statusCode)
+				isFiniteNumber(value.statusCode) &&
+				isOptionalNullableString(value.clientSessionId)
 			);
 		case "summary":
 			return isRequestSummary(value.payload);

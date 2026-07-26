@@ -1,6 +1,7 @@
 import { GitBranch, Menu, Shield, X, Zap } from "lucide-react";
 import { useState } from "react";
 import { Link, useLocation } from "react-router-dom";
+import { matchDashboardRoute } from "../lib/route-match";
 import { cn } from "../lib/utils";
 import { dashboardRoutes } from "../routes";
 import { ThemeToggle } from "./theme-toggle";
@@ -76,7 +77,9 @@ export function Navigation() {
 					<nav className="flex-1 space-y-1 p-4">
 						{dashboardRoutes.map((item) => {
 							const Icon = item.icon;
-							const isActive = location.pathname === item.path;
+							const isActive =
+								matchDashboardRoute(location.pathname, dashboardRoutes).path ===
+								item.path;
 							return (
 								<Link
 									key={item.path}

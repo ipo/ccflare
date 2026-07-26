@@ -1,7 +1,10 @@
 import { requestEvents } from "@ccflare/core";
 import { BadRequest, errorResponse, ServiceUnavailable } from "@ccflare/http";
 import { Logger } from "@ccflare/logger";
-import type { AccountProvider } from "@ccflare/types";
+import {
+	type AccountProvider,
+	extractClientSessionIdFromHeaders,
+} from "@ccflare/types";
 import {
 	type ResolvedProxyContext,
 	selectAccountsForRequest,
@@ -413,6 +416,9 @@ export async function handleCompatibilityProxy(
 		timestamp: requestMeta.timestamp,
 		method: requestMeta.method,
 		path: requestMeta.path,
+		clientSessionId: extractClientSessionIdFromHeaders(
+			Object.fromEntries(req.headers.entries()),
+		),
 	});
 	for (const actualProvider of COMPAT_PROVIDER_ORDER[model.family]) {
 		const response = await tryProviderFamily({

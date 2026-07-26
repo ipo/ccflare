@@ -1,6 +1,10 @@
 import { requestEvents, ServiceUnavailableError } from "@ccflare/core";
 import { Logger } from "@ccflare/logger";
-import { isRequestPayload, isRequestSummary } from "@ccflare/types";
+import {
+	extractClientSessionIdFromHeaders,
+	isRequestPayload,
+	isRequestSummary,
+} from "@ccflare/types";
 import {
 	createRequestMetadata,
 	ERROR_MESSAGES,
@@ -119,6 +123,9 @@ export async function handleProxy(
 		timestamp: requestMeta.timestamp,
 		method: requestMeta.method,
 		path: requestMeta.path,
+		clientSessionId: extractClientSessionIdFromHeaders(
+			Object.fromEntries(req.headers.entries()),
+		),
 	});
 
 	// 2. Prepare request body

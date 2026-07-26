@@ -1,9 +1,17 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { Navigate, Route, Routes, useLocation } from "react-router-dom";
+import {
+	Navigate,
+	Route,
+	Routes,
+	useLocation,
+	useParams,
+} from "react-router-dom";
 import { Navigation } from "./components/navigation";
+import { RequestsTab } from "./components/RequestsTab";
 import { QUERY_CONFIG, REFRESH_INTERVALS } from "./constants";
 import { ThemeProvider } from "./contexts/theme-context";
 import "./index.css";
+import { matchDashboardRoute } from "./lib/route-match";
 import { dashboardRoutes } from "./routes";
 
 const queryClient = new QueryClient({
@@ -15,11 +23,14 @@ const queryClient = new QueryClient({
 	},
 });
 
+function RequestsTabRoute() {
+	const { sessionId } = useParams<{ sessionId: string }>();
+	return <RequestsTab sessionId={sessionId} />;
+}
+
 export function App() {
 	const location = useLocation();
-	const currentRoute =
-		dashboardRoutes.find((route) => route.path === location.pathname) ||
-		dashboardRoutes[0];
+	const currentRoute = matchDashboardRoute(location.pathname, dashboardRoutes);
 
 	return (
 		<QueryClientProvider client={queryClient}>
@@ -54,6 +65,10 @@ export function App() {
 											element={route.element}
 										/>
 									))}
+									<Route
+										path="/requests/:sessionId"
+										element={<RequestsTabRoute />}
+									/>
 									<Route path="*" element={<Navigate to="/" replace />} />
 								</Routes>
 							</div>

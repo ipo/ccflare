@@ -3,7 +3,11 @@ import {
 	sanitizeRequestHeaders,
 	withSanitizedProxyHeaders,
 } from "@ccflare/http";
-import type { Account, HttpMethod } from "@ccflare/types";
+import {
+	type Account,
+	extractClientSessionIdFromHeaders,
+	type HttpMethod,
+} from "@ccflare/types";
 import { trackProxyBackgroundTask } from "./background-tasks";
 import type { ResolvedProxyContext } from "./handlers";
 import type { ChunkMessage, EndMessage, StartMessage } from "./worker-messages";
@@ -106,6 +110,7 @@ export async function forwardToClient(
 		path,
 		accountId: account?.id || null,
 		statusCode: response.status,
+		clientSessionId: extractClientSessionIdFromHeaders(requestHeadersObj),
 	});
 
 	/*********************************************************************

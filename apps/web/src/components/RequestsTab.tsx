@@ -20,10 +20,12 @@ import {
 	X,
 } from "lucide-react";
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useRequestsPageModel } from "../hooks/useRequestsPageModel";
 import { getStatusCodeTextClass } from "../lib/request-status";
 import { CopyButton } from "./CopyButton";
 import { RequestDetailsModal } from "./RequestDetailsModal";
+import { SessionPill } from "./SessionPill";
 import { TokenUsageDisplay } from "./TokenUsageDisplay";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
@@ -49,7 +51,8 @@ import {
 	SelectValue,
 } from "./ui/select";
 
-export function RequestsTab() {
+export function RequestsTab({ sessionId }: { sessionId?: string }) {
+	const navigate = useNavigate();
 	const [expandedRequests, setExpandedRequests] = useState<Set<string>>(
 		new Set(),
 	);
@@ -76,7 +79,7 @@ export function RequestsTab() {
 		loading,
 		error,
 		refetch: loadRequests,
-	} = useRequestsPageModel(200);
+	} = useRequestsPageModel(200, sessionId);
 
 	const toggleExpanded = (id: string) => {
 		setExpandedRequests((prev) => {
@@ -161,6 +164,30 @@ export function RequestsTab() {
 				</div>
 			</CardHeader>
 			<CardContent>
+				{/* Session filter indicator (route-driven, cleared by navigation) */}
+				{sessionId && (
+					<div className="mb-4 p-3 bg-muted/50 rounded-lg">
+						<div className="flex flex-wrap items-center gap-2">
+							<Badge variant="outline" className="gap-1.5 pr-1">
+								<Hash className="h-3 w-3" />
+								Session …{sessionId.slice(-4)}
+								<button
+									type="button"
+									onClick={() => navigate("/requests")}
+									className="ml-1 p-0.5 hover:bg-destructive/20 rounded"
+									title={`Clear session filter (${sessionId})`}
+								>
+									<X className="h-3 w-3" />
+								</button>
+							</Badge>
+							<span className="text-xs text-muted-foreground">
+								{requests.length} of {allRequests.length} requests match this
+								session
+							</span>
+						</div>
+					</div>
+				)}
+
 				{/* Active Filters Display */}
 				{hasActiveFilters && (
 					<div className="mb-4 p-3 bg-muted/50 rounded-lg">
@@ -438,10 +465,19 @@ export function RequestsTab() {
 											: "opacity-100"
 									}`}
 								>
-									<button
-										type="button"
+									{/* biome-ignore lint/a11y/useSemanticElements: a native button cannot legally nest the interactive SessionPill */}
+									<div
+										role="button"
+										tabIndex={0}
+										aria-expanded={isExpanded}
 										className="flex items-center justify-between cursor-pointer w-full text-left"
 										onClick={() => toggleExpanded(request.id)}
+										onKeyDown={(e) => {
+											if (e.key === "Enter" || e.key === " ") {
+												e.preventDefault();
+												toggleExpanded(request.id);
+											}
+										}}
 									>
 										<div className="flex items-center gap-2 flex-wrap">
 											{isExpanded ? (
@@ -500,6 +536,11 @@ export function RequestsTab() {
 														{formatTokensPerSecond(summary.tokensPerSecond)}
 													</Badge>
 												)}
+											{request.meta.trace.clientSessionId && (
+												<SessionPill
+													sessionId={request.meta.trace.clientSessionId}
+												/>
+											)}
 											{(request.meta.account.name ||
 												request.meta.account.id) && (
 												<span className="text-sm text-muted-foreground">
@@ -534,7 +575,7 @@ export function RequestsTab() {
 												)}
 											<span>ID: {request.id.slice(0, 8)}...</span>
 										</div>
-									</button>
+									</div>
 
 									{/* Action buttons */}
 									<div className="flex justify-end gap-2 mt-2">

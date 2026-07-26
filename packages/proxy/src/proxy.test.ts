@@ -132,6 +132,7 @@ describe("handleProxy routing", () => {
 			timestamp: expect.any(Number),
 			method: "POST",
 			path: "/v1/anthropic/v1/messages",
+			clientSessionId: null,
 		});
 		await Promise.resolve();
 		expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -144,5 +145,36 @@ describe("handleProxy routing", () => {
 		const response = await responsePromise;
 
 		expect(response.status).toBe(200);
+	});
+
+	it("includes the client session id in the ingress event when present", async () => {
+		const fetchMock = mock(() =>
+			Promise.resolve(new Response("ok", { status: 200 })),
+		);
+		globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+		const events: Array<unknown> = [];
+		requestEvents.on("event", (event) => {
+			events.push(event);
+		});
+
+		const response = await handleProxy(
+			new Request("http://localhost:8080/v1/anthropic/v1/messages", {
+				method: "POST",
+				headers: { "x-ccflare-session-id": "session-abc-123" },
+			}),
+			new URL("http://localhost:8080/v1/anthropic/v1/messages"),
+			createProxyContext([createTestProvider("anthropic")]),
+		);
+
+		expect(response.status).toBe(200);
+		expect(events).toContainEqual({
+			type: "ingress",
+			id: expect.any(String),
+			timestamp: expect.any(Number),
+			method: "POST",
+			path: "/v1/anthropic/v1/messages",
+			clientSessionId: "session-abc-123",
+		});
 	});
 });
