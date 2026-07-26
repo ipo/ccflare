@@ -1,6 +1,16 @@
 import { isRecord } from "./guards";
 
-const CLAUDE_CODE_SESSION_ID_HEADER = "x-claude-code-session-id";
+export const CLAUDE_CODE_SESSION_ID_HEADER = "x-claude-code-session-id";
+export const CCFLARE_SESSION_ID_HEADER = "x-ccflare-session-id";
+
+/**
+ * Session-id headers claudeflare consumes, in precedence order. ccflare's own
+ * header wins over headers a client may be blindly passing through.
+ */
+const SESSION_ID_HEADERS = [
+	CCFLARE_SESSION_ID_HEADER,
+	CLAUDE_CODE_SESSION_ID_HEADER,
+] as const;
 
 export function decodeBase64Utf8(
 	value: string | null | undefined,
@@ -108,8 +118,13 @@ export function extractClientSessionIdFromHeaders(
 		return null;
 	}
 
-	const value = headers[CLAUDE_CODE_SESSION_ID_HEADER];
-	return typeof value === "string" ? value : null;
+	for (const headerName of SESSION_ID_HEADERS) {
+		const value = headers[headerName];
+		if (typeof value === "string") {
+			return value;
+		}
+	}
+	return null;
 }
 
 export function extractRequestLinkageFromPayload(payload: unknown): {

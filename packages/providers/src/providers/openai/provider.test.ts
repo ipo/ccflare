@@ -37,12 +37,17 @@ describe("OpenAIProvider", () => {
 			new Headers({
 				host: "localhost:8080",
 				"anthropic-version": "2023-06-01",
+				"x-ccflare-session-id": "session-xyz",
 			}),
 			createApiKeyAccount("openai"),
 		);
 
 		expect(headers.get("authorization")).toBe("Bearer sk-openai-test");
-		expectRemovedHeaders(headers, ["host", "anthropic-version"]);
+		expectRemovedHeaders(headers, [
+			"host",
+			"anthropic-version",
+			"x-ccflare-session-id",
+		]);
 	});
 
 	it("ignores OAuth access tokens and does not expose OAuth helpers", () => {

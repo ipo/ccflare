@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import {
 	decodeBase64Utf8,
+	extractClientSessionIdFromHeaders,
 	extractPreviousResponseId,
 	extractRequestLinkageFromPayload,
 	extractResponseId,
@@ -63,6 +64,33 @@ describe("conversation link helpers", () => {
 			responseId: "resp_789",
 			clientSessionId: "session-123",
 		});
+	});
+
+	it("extracts client session ids with ccflare header precedence", () => {
+		expect(extractClientSessionIdFromHeaders(null)).toBeNull();
+		expect(extractClientSessionIdFromHeaders({})).toBeNull();
+		expect(
+			extractClientSessionIdFromHeaders({
+				"x-claude-code-session-id": "claude-session",
+			}),
+		).toBe("claude-session");
+		expect(
+			extractClientSessionIdFromHeaders({
+				"x-ccflare-session-id": "ccflare-session",
+			}),
+		).toBe("ccflare-session");
+		expect(
+			extractClientSessionIdFromHeaders({
+				"x-ccflare-session-id": "ccflare-session",
+				"x-claude-code-session-id": "claude-session",
+			}),
+		).toBe("ccflare-session");
+		expect(
+			extractClientSessionIdFromHeaders({
+				"x-ccflare-session-id": 42,
+				"x-claude-code-session-id": "claude-session",
+			}),
+		).toBe("claude-session");
 	});
 
 	it("decodes utf-8 base64 in browser-style environments", () => {

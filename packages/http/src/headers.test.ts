@@ -17,4 +17,18 @@ describe("sanitizeRequestHeaders", () => {
 		expect(sanitized.get("cookie")).toBeNull();
 		expect(sanitized.get("content-type")).toBe("application/json");
 	});
+
+	it("keeps session-id headers for post-processing extraction", () => {
+		// The persisted copy is the only header set the post-processor sees;
+		// stripping these here would silently break client_session_id extraction.
+		const sanitized = sanitizeRequestHeaders(
+			new Headers({
+				"x-ccflare-session-id": "ccflare-session",
+				"x-claude-code-session-id": "claude-session",
+			}),
+		);
+
+		expect(sanitized.get("x-ccflare-session-id")).toBe("ccflare-session");
+		expect(sanitized.get("x-claude-code-session-id")).toBe("claude-session");
+	});
 });

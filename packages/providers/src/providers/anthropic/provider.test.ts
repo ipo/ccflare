@@ -38,6 +38,7 @@ describe("AnthropicProvider", () => {
 				host: "localhost:8080",
 				"accept-encoding": "gzip",
 				"content-encoding": "gzip",
+				"x-ccflare-session-id": "session-xyz",
 			}),
 			createApiKeyAccount("anthropic"),
 		);
@@ -48,6 +49,7 @@ describe("AnthropicProvider", () => {
 			"host",
 			"accept-encoding",
 			"content-encoding",
+			"x-ccflare-session-id",
 		]);
 	});
 

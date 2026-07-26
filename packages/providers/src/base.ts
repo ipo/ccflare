@@ -1,5 +1,5 @@
 import { sanitizeProxyHeaders } from "@ccflare/http";
-import type { Account } from "@ccflare/types";
+import { type Account, CCFLARE_SESSION_ID_HEADER } from "@ccflare/types";
 import type { Provider, RateLimitInfo } from "./types";
 
 /**
@@ -10,6 +10,8 @@ const TRANSPORT_HEADERS_TO_DELETE = [
 	"host",
 	"accept-encoding",
 	"content-encoding",
+	// ccflare-owned session signal: consumed by ccflare, never forwarded upstream
+	CCFLARE_SESSION_ID_HEADER,
 ] as const;
 
 /**

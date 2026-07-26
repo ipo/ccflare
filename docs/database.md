@@ -128,7 +128,7 @@ Important fields:
 - `reasoning_tokens`: preserves provider-reported reasoning-token data where available
 - `ttft_ms`, `proxy_overhead_ms`, `upstream_ttfb_ms`, `streaming_duration_ms`: decompose latency for streaming and proxy troubleshooting
 - `response_id`, `previous_response_id`, `response_chain_id`: track Responses API lineage without overloading session-level concepts
-- `client_session_id`: stores provider/client session correlation such as Claude Code's `x-claude-code-session-id`
+- `client_session_id`: stores provider/client session correlation from a client-supplied session header -- ccflare's own `x-ccflare-session-id` (preferred) or Claude Code's `x-claude-code-session-id` (fallback); ccflare consumes both but never forwards `x-ccflare-session-id` upstream
 
 ### `request_payloads`
 

@@ -54,6 +54,7 @@ describe("ClaudeCodeProvider", () => {
 				"x-api-key": "client-supplied-key",
 				"accept-encoding": "gzip",
 				"content-encoding": "gzip",
+				"x-ccflare-session-id": "session-xyz",
 			}),
 			createOAuthAccount("claude-code"),
 		);
@@ -64,6 +65,7 @@ describe("ClaudeCodeProvider", () => {
 			"host",
 			"accept-encoding",
 			"content-encoding",
+			"x-ccflare-session-id",
 		]);
 	});
 

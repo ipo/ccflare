@@ -66,6 +66,7 @@ describe("CodexProvider", () => {
 				"anthropic-version": "2023-06-01",
 				"accept-encoding": "gzip",
 				"content-encoding": "gzip",
+				"x-ccflare-session-id": "session-xyz",
 			}),
 			createOAuthAccount("codex"),
 		);
@@ -81,6 +82,7 @@ describe("CodexProvider", () => {
 			"host",
 			"accept-encoding",
 			"content-encoding",
+			"x-ccflare-session-id",
 		]);
 	});
 

@@ -60,6 +60,7 @@ describe("KimiProvider", () => {
 			new Headers({
 				"x-api-key": "leftover",
 				"anthropic-version": "2023-06-01",
+				"x-ccflare-session-id": "session-xyz",
 				host: "localhost:8080",
 			}),
 			account(),
@@ -69,6 +70,7 @@ describe("KimiProvider", () => {
 		expect(headers.get("x-api-key")).toBeNull();
 		expect(headers.get("anthropic-version")).toBeNull();
 		expect(headers.get("host")).toBeNull();
+		expect(headers.get("x-ccflare-session-id")).toBeNull();
 	});
 
 	it("refreshes with the device-flow client id and honors token rotation", async () => {
