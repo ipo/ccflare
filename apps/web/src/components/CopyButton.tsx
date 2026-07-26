@@ -1,4 +1,4 @@
-import { Check, Copy } from "lucide-react";
+import { Check, Copy, type LucideIcon } from "lucide-react";
 import { type ComponentProps, useRef, useState } from "react";
 import { cn } from "../lib/utils";
 import { Button } from "./ui/button";
@@ -23,6 +23,10 @@ interface CopyButtonProps {
 	 * Optional title attribute for accessibility.
 	 */
 	title?: string;
+	/**
+	 * Icon shown when not copied. Defaults to Copy.
+	 */
+	icon?: LucideIcon;
 }
 
 /**
@@ -37,6 +41,7 @@ export function CopyButton({
 	className,
 	children,
 	title,
+	icon: Icon = Copy,
 }: CopyButtonProps) {
 	const [copied, setCopied] = useState(false);
 	const timeoutRef = useRef<number | null>(null);
@@ -72,11 +77,11 @@ export function CopyButton({
 				</span>
 			) : children ? (
 				<>
-					<Copy className="h-4 w-4 mr-1" />
+					<Icon className="h-4 w-4 mr-1" />
 					{children}
 				</>
 			) : (
-				<Copy className="h-4 w-4" />
+				<Icon className="h-4 w-4" />
 			)}
 		</Button>
 	);

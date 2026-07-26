@@ -6,6 +6,7 @@ const longContent = `word\n${"x".repeat(400)}`;
 
 function renderMessage(linebreak?: boolean) {
 	return renderToStaticMarkup(
+		// biome-ignore lint/a11y/useValidAriaRole: "role" is a chat message role, not ARIA
 		<Message
 			role="assistant"
 			content={longContent}

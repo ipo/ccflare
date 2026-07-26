@@ -14,6 +14,7 @@ import {
 	Eye,
 	Filter,
 	Hash,
+	Link,
 	RefreshCw,
 	User,
 	X,
@@ -545,6 +546,13 @@ export function RequestsTab() {
 										>
 											<Eye className="h-4 w-4" />
 										</Button>
+										<CopyButton
+											variant="ghost"
+											size="icon"
+											icon={Link}
+											title="Copy raw conversation link"
+											value={`${window.location.origin}/api/requests/${request.id}/conversation`}
+										/>
 										<CopyButton
 											variant="ghost"
 											size="icon"
