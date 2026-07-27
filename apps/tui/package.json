@@ -8,7 +8,7 @@
 	"type": "module",
 	"scripts": {
 		"dev": "bun run src/main.ts",
-		"build": "bun build src/main.ts --compile --outfile dist/ccflare --target=bun",
+		"build": "bun build ../../packages/proxy/src/post-processor.worker.ts --outfile dist/post-processor.worker.js --target=bun && bun -e \"import { chmodSync } from 'node:fs'; chmodSync('dist/post-processor.worker.js', 0o644)\" && bun build src/main.ts --compile --outfile dist/ccflare --target=bun",
 		"prepublishOnly": "bun run build",
 		"postpublish": "chmod +x dist/ccflare"
 	},

@@ -7,6 +7,7 @@ import {
 	type LoadBalancingStrategy,
 } from "@ccflare/types";
 import type { UsageWorkerTransport } from "../usage-worker";
+import type { WebSocketTranscriptRecorder } from "../websocket-transcript-recorder";
 
 export interface ProxyContext {
 	strategy: LoadBalancingStrategy;
@@ -16,6 +17,7 @@ export interface ProxyContext {
 	refreshInFlight: Map<string, Promise<string>>;
 	asyncWriter: AsyncDbWriter;
 	usageWorker: UsageWorkerTransport;
+	websocketRecorder: WebSocketTranscriptRecorder;
 }
 
 export interface ResolvedProxyContext extends ProxyContext {

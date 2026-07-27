@@ -9,6 +9,17 @@ export function runStartupMaintenance(
 	const log = new Logger("StartupMaintenance");
 
 	try {
+		const interrupted = dbOps.markInterruptedWebSocketRequests();
+		if (interrupted > 0) {
+			log.warn(
+				`Marked ${interrupted} WebSocket request(s) interrupted after restart`,
+			);
+		}
+	} catch (err) {
+		log.error(`WebSocket startup reconciliation error: ${err}`);
+	}
+
+	try {
 		const payloadDays = config.getDataRetentionDays();
 		const requestDays = config.getRequestRetentionDays();
 		const { removedRequests, removedPayloads } = dbOps.cleanupOldRequests(
@@ -22,12 +33,7 @@ export function runStartupMaintenance(
 		log.error(`Startup cleanup error: ${err}`);
 	}
 
-	try {
-		dbOps.compact();
-		log.info("Database compacted at startup");
-	} catch (err) {
-		log.error(`Database compaction error: ${err}`);
-	}
-
+	// VACUUM remains available through the explicit maintenance endpoint. Do not
+	// rewrite a potentially large transcript database on every startup.
 	return () => {};
 }

@@ -14,6 +14,7 @@ export {
 export { SessionStrategy } from "./strategies";
 export type { UsageWorkerHealthSnapshot } from "./usage-worker";
 export {
+	closeAllWebSocketProxySessions,
 	handleWebSocketUpgradeRequest,
 	isWebSocketUpgradeRequest,
 	type WebSocketProxyData,
@@ -21,6 +22,10 @@ export {
 	type WebSocketProxySession,
 	websocketProxyHandler,
 } from "./websocket-proxy";
+export {
+	WebSocketTranscriptRecorder,
+	type WebSocketTranscriptRecorderHealth,
+} from "./websocket-transcript-recorder";
 export type {
 	AckMessage,
 	ChunkMessage,

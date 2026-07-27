@@ -1,4 +1,4 @@
-import type { DatabaseOperations } from "@ccflare/database";
+import type { DatabaseOperations, RequestDetailRow } from "@ccflare/database";
 import {
 	errorResponse,
 	InternalServerError,
@@ -6,11 +6,17 @@ import {
 	NotFound,
 } from "@ccflare/http";
 import { Logger } from "@ccflare/logger";
-import { parseRequestPayload } from "@ccflare/types";
+import {
+	isAccountProvider,
+	isHttpMethod,
+	parseRequestPayload,
+	type RequestPayload,
+} from "@ccflare/types";
 import {
 	enrichRequestPayload,
 	serializeRequestResponse,
 } from "../serializers/request";
+import { createWebSocketTranscriptExportResponse } from "./websocket-transcript";
 
 const log = new Logger("RequestsHandler");
 
@@ -41,6 +47,62 @@ function parsePayloadRows(
 	});
 }
 
+function parseDetailRows(rows: RequestDetailRow[]): RequestPayload[] {
+	return rows.flatMap((row) => {
+		if (!isHttpMethod(row.method) || !isAccountProvider(row.provider)) {
+			return [];
+		}
+		if (row.payload_json) {
+			try {
+				const payload = parseRequestPayload({
+					id: row.id,
+					...JSON.parse(row.payload_json),
+				});
+				if (payload) {
+					return [enrichRequestPayload(payload, row.account_name)];
+				}
+			} catch {
+				log.warn(`Falling back to summary payload for ${row.id}`);
+			}
+		}
+
+		const payload: RequestPayload = {
+			id: row.id,
+			request: { headers: {}, body: null },
+			response:
+				row.status_code === null
+					? null
+					: { status: row.status_code, headers: {}, body: null },
+			...(row.error_message ? { error: row.error_message } : {}),
+			meta: {
+				trace: {
+					timestamp: row.timestamp,
+					method: row.method,
+					path: row.path,
+					provider: row.provider,
+					upstreamPath: row.upstream_path,
+					responseId: row.response_id,
+					previousResponseId: row.previous_response_id,
+					responseChainId: row.response_chain_id,
+					clientSessionId: row.client_session_id,
+				},
+				account: { id: row.account_used, name: row.account_name },
+				transport: {
+					success: row.success === 1,
+					pending: row.success === null,
+					retry: row.failover_attempts,
+					isStream: row.method === "WS",
+					ttftMs: row.ttft_ms,
+					proxyOverheadMs: row.proxy_overhead_ms,
+					upstreamTtfbMs: row.upstream_ttfb_ms,
+					streamingDurationMs: row.streaming_duration_ms,
+				},
+			},
+		};
+		return [payload];
+	});
+}
+
 /**
  * Create a requests summary handler (existing functionality)
  */
@@ -65,9 +127,7 @@ export function createRequestsSummaryHandler(dbOps: DatabaseOperations) {
 export function createRequestsDetailHandler(dbOps: DatabaseOperations) {
 	return (limit = 100): Response => {
 		try {
-			return jsonResponse(
-				parsePayloadRows(dbOps.listRequestPayloadsWithAccountNames(limit)),
-			);
+			return jsonResponse(parseDetailRows(dbOps.listRequestDetailRows(limit)));
 		} catch (error) {
 			log.error("Failed to load request details", error);
 			return errorResponse(
@@ -80,6 +140,18 @@ export function createRequestsDetailHandler(dbOps: DatabaseOperations) {
 export function createRequestsConversationHandler(dbOps: DatabaseOperations) {
 	return (requestId: string): Response => {
 		try {
+			const request = dbOps.getRequestWithAccountName(requestId);
+			if (!request) {
+				return errorResponse(NotFound("Request conversation not found"));
+			}
+			if (request.method === "WS") {
+				return createWebSocketTranscriptExportResponse(
+					dbOps,
+					requestId,
+					request.success === null,
+				);
+			}
+
 			const rows = dbOps.listResponseChainPayloadsWithAccountNames(requestId);
 			if (rows.length === 0) {
 				return errorResponse(NotFound("Request conversation not found"));

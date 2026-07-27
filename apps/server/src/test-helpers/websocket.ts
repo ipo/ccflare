@@ -266,6 +266,7 @@ export function createInMemoryProxyContext(
 	accounts: Account[],
 	usageMessages: IncomingWorkerMessage[] = [],
 ): ProxyContext {
+	let transcriptSequence = 0;
 	return {
 		providerRegistry: new ProviderRegistry([new CodexProvider()]),
 		strategy: {
@@ -284,6 +285,12 @@ export function createInMemoryProxyContext(
 				return accounts.filter(
 					(account) => account.provider === provider && !account.paused,
 				);
+			},
+			saveRequestMeta() {},
+			updateWebSocketClientSessionId() {},
+			updateWebSocketRequestAccount() {},
+			getRequestWithAccountName() {
+				return null;
 			},
 		},
 		runtime: {
@@ -305,5 +312,20 @@ export function createInMemoryProxyContext(
 				usageMessages.push(message);
 			},
 		} as unknown as Worker,
+		websocketRecorder: {
+			start() {},
+			reserveSequence() {
+				transcriptSequence += 1;
+				return transcriptSequence;
+			},
+			recordReservedFrame() {},
+			prepareFinalize() {},
+			discard() {},
+			recordFrame() {},
+			recordLifecycle() {},
+			finalize() {
+				return null;
+			},
+		},
 	} as unknown as ProxyContext;
 }

@@ -133,6 +133,16 @@ describe("UsageWorkerController", () => {
 		);
 	});
 
+	it("resolves a usage-worker sidecar beside a compiled executable", () => {
+		const executablePath = "/opt/ccflare/ccflare-server";
+		expect(
+			resolveUsageWorkerEntrypoint(
+				executablePath,
+				(path) => path === "/opt/ccflare/post-processor.worker.js",
+			),
+		).toBe("file:///opt/ccflare/post-processor.worker.js");
+	});
+
 	it("queues outgoing messages until the worker sends ready", async () => {
 		const workers: FakeWorker[] = [];
 		const controller = new UsageWorkerController({

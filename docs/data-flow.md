@@ -95,22 +95,33 @@ sequenceDiagram
 
 ## WebSocket Flow
 
-Websocket-capable provider routes go through the same runtime routing layer, but switch into the websocket proxy path when the request is an upgrade request.
+Websocket-capable provider routes go through the same runtime routing layer, but switch into the websocket proxy path when the request is an upgrade request. One WebSocket connection is represented by one pending `WS` request row from open through close.
+
+Every application frame observed by the proxy is captured before forwarding in a provider-neutral envelope containing its sequence, timestamp, direction, frame type, encoding, and raw data. Envelopes are accumulated into append-only transcript chunks and flushed periodically, at chunk thresholds, on close, and during graceful shutdown. Chunk thresholds control write batching; they do not cap total transcript size.
 
 ```mermaid
 flowchart TD
-    REQ[Incoming /v1/{provider}/... request]
-    UPGRADE{WebSocket upgrade?}
-    WS[websocket proxy handler]
-    HTTP[standard HTTP proxy path]
-    UPSTREAM[Upstream provider]
+    REQ[Incoming /v1/{provider}/... upgrade]
+    ROW[Create pending WS request]
+    CLIENT[Client frames]
+    UPSTREAM[Upstream frames]
+    CHUNK[Ordered transcript chunk]
+    DB[(SQLite)]
+    LIVE[Request-scoped transcript SSE]
+    CLOSE[Flush final chunk + finalize request]
 
-    REQ --> UPGRADE
-    UPGRADE -->|yes| WS
-    UPGRADE -->|no| HTTP
-    WS --> UPSTREAM
-    HTTP --> UPSTREAM
+    REQ --> ROW
+    CLIENT --> CHUNK
+    UPSTREAM --> CHUNK
+    CHUNK --> DB
+    DB --> LIVE
+    CHUNK --> CLOSE
+    CLOSE --> DB
 ```
+
+Transcript storage does not classify provider events. The dashboard parses only chunks that are opened for display, so newer parsers can improve historical conversations retroactively. Unknown, non-JSON, and binary frames remain available in their original order.
+
+The raw `/api/requests/:id/conversation` debug endpoint exports a finite persisted-at-start WebSocket snapshot as ordered NDJSON. It pages through chunk storage with bounded server memory, flattens storage-only chunk boundaries, and does not cap the total response size. Live followers use the separate request-scoped transcript SSE endpoint.
 
 ## Response and Usage Processing
 
@@ -121,11 +132,13 @@ For HTTP proxy traffic:
 - request metadata is queued for persistence
 - background post-processing extracts additional usage, payload, and summary information
 
-For streaming and websocket traffic:
+For streaming HTTP traffic:
 
 - the proxy emits chunk/summary payloads to the worker
 - the worker parses provider-specific usage events
 - final summaries and payloads are persisted asynchronously
+
+For WebSocket traffic, the main proxy path writes ordered raw transcript chunks directly. This avoids holding an entire long-lived connection in the HTTP post-processor worker and allows an open request detail view to receive newly persisted chunks live. A separate best-effort analytics extractor aggregates recognized `response.completed` usage onto the connection row; it never changes or gates raw transcript capture.
 
 ## Event Streaming
 

@@ -612,6 +612,67 @@ describe("database schema", () => {
 		}
 	});
 
+	it("preserves request child rows while rebuilding a legacy requests table", () => {
+		const db = new Database(":memory:");
+		try {
+			createV1Schema(db);
+			db.run("DROP TABLE request_payloads");
+			db.run(`
+				CREATE TABLE request_payloads (
+					id TEXT PRIMARY KEY,
+					json TEXT NOT NULL,
+					FOREIGN KEY (id) REFERENCES requests(id) ON DELETE CASCADE
+				)
+			`);
+			db.run(`
+				CREATE TABLE websocket_transcript_chunks (
+					request_id TEXT NOT NULL,
+					chunk_sequence INTEGER NOT NULL,
+					first_frame_sequence INTEGER NOT NULL,
+					last_frame_sequence INTEGER NOT NULL,
+					started_at INTEGER NOT NULL,
+					ended_at INTEGER NOT NULL,
+					format_version INTEGER NOT NULL,
+					data BLOB NOT NULL,
+					byte_length INTEGER NOT NULL,
+					PRIMARY KEY (request_id, chunk_sequence),
+					FOREIGN KEY (request_id) REFERENCES requests(id) ON DELETE CASCADE
+				)
+			`);
+			db.run(
+				`INSERT INTO requests (id, timestamp, method, path) VALUES (?, ?, ?, ?)`,
+				["legacy-request", 1_000, "POST", "/v1/openai/responses"],
+			);
+			db.run(`INSERT INTO request_payloads (id, json) VALUES (?, ?)`, [
+				"legacy-request",
+				JSON.stringify({ preserved: true }),
+			]);
+			db.run(
+				`INSERT INTO websocket_transcript_chunks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				["legacy-request", 0, 1, 1, 1_000, 1_000, 1, Buffer.from("[]"), 2],
+			);
+			db.exec("PRAGMA foreign_keys = ON");
+
+			runMigrations(db);
+
+			expect(
+				db
+					.query(`SELECT json FROM request_payloads WHERE id = ?`)
+					.get("legacy-request"),
+			).toEqual({ json: JSON.stringify({ preserved: true }) });
+			expect(
+				db
+					.query(
+						`SELECT COUNT(*) AS count FROM websocket_transcript_chunks WHERE request_id = ?`,
+					)
+					.get("legacy-request"),
+			).toEqual({ count: 1 });
+			expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
+		} finally {
+			db.close();
+		}
+	});
+
 	it("renames duplicate legacy account names before creating the unique index", () => {
 		const db = new Database(":memory:");
 

@@ -66,6 +66,23 @@ export function errorResponse(error: unknown): Response {
 }
 
 /**
+ * Create a streaming newline-delimited JSON response.
+ */
+export function ndjsonResponse(
+	stream: ReadableStream,
+	headers?: HeadersInit,
+): Response {
+	return new Response(stream, {
+		headers: {
+			"Content-Type": "application/x-ndjson; charset=utf-8",
+			"Cache-Control": "no-store",
+			"X-Content-Type-Options": "nosniff",
+			...headers,
+		},
+	});
+}
+
+/**
  * Create a streaming response for Server-Sent Events
  */
 export function sseResponse(

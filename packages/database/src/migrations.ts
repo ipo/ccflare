@@ -561,19 +561,109 @@ export function ensureSchema(db: Database): void {
 	ensureAuthSessionsTable(db);
 }
 
+function ensureWebSocketTranscriptTable(db: Database): void {
+	db.run(`
+		CREATE TABLE IF NOT EXISTS websocket_transcript_chunks (
+			request_id TEXT NOT NULL,
+			chunk_sequence INTEGER NOT NULL,
+			first_frame_sequence INTEGER NOT NULL,
+			last_frame_sequence INTEGER NOT NULL,
+			started_at INTEGER NOT NULL,
+			ended_at INTEGER NOT NULL,
+			format_version INTEGER NOT NULL,
+			data BLOB NOT NULL,
+			byte_length INTEGER NOT NULL,
+			PRIMARY KEY (request_id, chunk_sequence),
+			FOREIGN KEY (request_id) REFERENCES requests(id) ON DELETE CASCADE
+		)
+	`);
+	db.run(`
+		CREATE INDEX IF NOT EXISTS idx_websocket_chunks_request_last_frame
+		ON websocket_transcript_chunks(request_id, last_frame_sequence)
+	`);
+}
+
+function tableExists(db: Database, tableName: string): boolean {
+	return (
+		db
+			.query(
+				`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1`,
+			)
+			.get(tableName) !== null
+	);
+}
+
+function removeOrphanedRequestChildren(db: Database): void {
+	for (const [table, column] of [
+		["request_payloads", "id"],
+		["websocket_transcript_chunks", "request_id"],
+	] as const) {
+		if (!tableExists(db, table)) continue;
+		const result = db.run(
+			`DELETE FROM ${table} WHERE ${column} NOT IN (SELECT id FROM requests)`,
+		);
+		if (result.changes > 0) {
+			log.warn(
+				`Removed ${result.changes} orphaned row(s) from ${table} before migration`,
+			);
+		}
+	}
+}
+
+function rebuildLegacyTables(
+	db: Database,
+	options: {
+		accounts: boolean;
+		requests: boolean;
+	},
+): void {
+	if (!options.accounts && !options.requests) return;
+
+	const foreignKeys = db.query("PRAGMA foreign_keys").get() as {
+		foreign_keys: 0 | 1;
+	} | null;
+	const restoreForeignKeys = foreignKeys?.foreign_keys === 1;
+	if (options.requests) removeOrphanedRequestChildren(db);
+
+	// SQLite ignores PRAGMA foreign_keys changes inside a transaction. Disable it
+	// before rebuilding parent tables so DROP TABLE cannot cascade-delete child
+	// payload/transcript rows.
+	if (restoreForeignKeys) db.exec("PRAGMA foreign_keys = OFF");
+	db.run("BEGIN");
+	try {
+		if (options.accounts) {
+			migrateAccountsTable(db, getTableInfo(db, "accounts"));
+		}
+		if (options.requests) {
+			migrateRequestsTable(db, getTableInfo(db, "requests"));
+		}
+		db.run("COMMIT");
+	} catch (error) {
+		db.run("ROLLBACK");
+		throw error;
+	} finally {
+		if (restoreForeignKeys) db.exec("PRAGMA foreign_keys = ON");
+	}
+
+	const violations = db.query("PRAGMA foreign_key_check").all();
+	if (violations.length > 0) {
+		throw new Error(
+			`Database migration left ${violations.length} foreign-key violation(s)`,
+		);
+	}
+}
+
 export function runMigrations(db: Database): void {
 	// Ensure base schema exists first
 	ensureSchema(db);
 
 	const accountsInfo = getTableInfo(db, "accounts");
-	if (shouldMigrateAccountsTable(accountsInfo)) {
-		migrateAccountsTable(db, accountsInfo);
-	}
-
 	const requestsInfo = getTableInfo(db, "requests");
-	if (shouldMigrateRequestsTable(requestsInfo)) {
-		migrateRequestsTable(db, requestsInfo);
-	}
+	rebuildLegacyTables(db, {
+		accounts: shouldMigrateAccountsTable(accountsInfo),
+		requests: shouldMigrateRequestsTable(requestsInfo),
+	});
+
 	ensureRequestLinkageColumns(db);
 	backfillRequestLinkageColumns(db);
 
@@ -582,6 +672,7 @@ export function runMigrations(db: Database): void {
 	db.run("DROP INDEX IF EXISTS idx_oauth_sessions_expires");
 	ensureAuthSessionsTable(db);
 	ensureAccountsNameUniqueness(db);
+	ensureWebSocketTranscriptTable(db);
 
 	// Add performance indexes
 	db.run(

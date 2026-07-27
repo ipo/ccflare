@@ -16,6 +16,7 @@ import {
 	getUsageWorkerHealth,
 	type ProxyContext,
 	SessionStrategy,
+	WebSocketTranscriptRecorder,
 } from "@ccflare/proxy";
 
 export type BootstrappedRuntime = {
@@ -89,6 +90,8 @@ export function bootstrapRuntime(
 	container.registerInstance(SERVICE_KEYS.AsyncWriter, asyncWriter);
 	registerDisposable(asyncWriter);
 
+	const websocketRecorder = new WebSocketTranscriptRecorder(dbOps);
+
 	const pricingLogger = new Logger("Pricing");
 	container.registerInstance(SERVICE_KEYS.PricingLogger, pricingLogger);
 	setPricingLogger(pricingLogger);
@@ -105,6 +108,7 @@ export function bootstrapRuntime(
 				queuedJobs: asyncWriter.getQueueSize(),
 			},
 			usageWorker: getUsageWorkerHealth(),
+			websocketRecorder: websocketRecorder.getHealthSnapshot(),
 		}),
 	});
 
@@ -119,6 +123,7 @@ export function bootstrapRuntime(
 		refreshInFlight: new Map(),
 		asyncWriter,
 		usageWorker: getUsageWorker(),
+		websocketRecorder,
 	};
 
 	wireStrategyHotReload(config, log, dbOps, proxyContext, runtimeConfig);

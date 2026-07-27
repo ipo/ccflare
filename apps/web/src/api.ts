@@ -20,6 +20,7 @@ import type {
 	StrategyName,
 	StrategyResponse,
 	TimeRange,
+	WebSocketTranscriptPage,
 } from "@ccflare/types";
 import { isLogEvent, parseLogStreamEvent } from "@ccflare/types";
 import { API_LIMITS, API_TIMEOUT } from "./constants";
@@ -181,6 +182,16 @@ class API extends HttpClient {
 	async getRequestConversation(requestId: string): Promise<RequestPayload[]> {
 		return this.getJson<RequestPayload[]>(
 			`/api/requests/${encodeURIComponent(requestId)}/conversation`,
+		);
+	}
+
+	async getWebSocketTranscript(
+		requestId: string,
+		after = 0,
+		limit = 100,
+	): Promise<WebSocketTranscriptPage> {
+		return this.getJson<WebSocketTranscriptPage>(
+			`/api/requests/${encodeURIComponent(requestId)}/transcript?after=${after}&limit=${limit}`,
 		);
 	}
 

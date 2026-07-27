@@ -30,6 +30,24 @@ describe("DatabaseOperations", () => {
 		}
 	});
 
+	it("opens a secondary worker connection without schema writes", () => {
+		const tempDir = mkdtempSync(join(tmpdir(), "ccflare-db-ops-"));
+		tempDirs.push(tempDir);
+		const dbPath = join(tempDir, "ccflare.db");
+		const primary = new DatabaseOperations(dbPath);
+		let secondary: DatabaseOperations | null = null;
+
+		try {
+			primary.getDatabase().exec("BEGIN IMMEDIATE");
+			secondary = new DatabaseOperations(dbPath, { initializeSchema: false });
+			expect(secondary.getAllAccounts()).toEqual([]);
+		} finally {
+			primary.getDatabase().exec("ROLLBACK");
+			secondary?.close();
+			primary.close();
+		}
+	});
+
 	it("lists request summaries with account names and preserves zero-valued usage", () => {
 		const tempDir = mkdtempSync(join(tmpdir(), "ccflare-db-ops-"));
 		tempDirs.push(tempDir);

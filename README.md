@@ -198,7 +198,10 @@ Key endpoints:
 - `POST /api/accounts/:id/rename` — rename an account
 - `GET /api/requests` — recent request summaries
 - `GET /api/requests/detail` — detailed request info with payloads
-- `GET /api/requests/stream` — live request stream via SSE
+- `GET /api/requests/:id/conversation` — HTTP conversation JSON or full WebSocket transcript NDJSON export
+- `GET /api/requests/stream` — live request summary stream via SSE
+- `GET /api/requests/:id/transcript` — paged raw WebSocket transcript chunks
+- `GET /api/requests/:id/transcript/stream` — live request-scoped WebSocket transcript stream
 - `GET /api/analytics` — aggregated analytics
 - `GET /api/stats` — usage and performance stats
 - `POST /api/stats/reset` — reset usage statistics

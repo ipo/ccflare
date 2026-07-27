@@ -137,17 +137,20 @@ bun build src/main.ts --compile --outfile dist/ccflare --target=bun
 cd ../server
 bun build src/server.ts --compile --outfile dist/ccflare-server
 
-# Copy binary to deployment location
+# Copy the binary and its usage-worker sidecar to the deployment location
 cp apps/tui/dist/ccflare /opt/ccflare/
-# Make it executable
+cp apps/tui/dist/post-processor.worker.js /opt/ccflare/
+# Set runtime permissions
 chmod +x /opt/ccflare/ccflare
+chmod 644 /opt/ccflare/post-processor.worker.js
 ```
 
 #### Binary Deployment Structure
 
 ```
 /opt/ccflare/
-├── ccflare             # Main binary (TUI + CLI + Server)
+├── ccflare                  # Main binary (TUI + CLI + Server)
+├── post-processor.worker.js # HTTP payload/usage persistence worker
 ├── config/
 │   └── config.json     # Configuration (optional)
 └── data/
@@ -298,10 +301,12 @@ RUN useradd -r -s /bin/false ccflare
 
 # Copy binary and dashboard
 COPY --from=builder /app/apps/tui/dist/ccflare /usr/local/bin/ccflare
+COPY --from=builder /app/apps/tui/dist/post-processor.worker.js /usr/local/bin/post-processor.worker.js
 COPY --from=builder /app/apps/web/dist /opt/ccflare/dashboard
 
 # Set permissions
-RUN chmod +x /usr/local/bin/ccflare
+RUN chmod +x /usr/local/bin/ccflare \
+    && chmod 644 /usr/local/bin/post-processor.worker.js
 
 # Create data directories
 RUN mkdir -p /data /config && chown -R ccflare:ccflare /data /config

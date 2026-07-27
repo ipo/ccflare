@@ -96,7 +96,20 @@ erDiagram
     }
 
     accounts ||--o{ requests : "handles"
+    websocket_transcript_chunks {
+        TEXT request_id FK
+        INTEGER chunk_sequence
+        INTEGER first_frame_sequence
+        INTEGER last_frame_sequence
+        INTEGER started_at
+        INTEGER ended_at
+        INTEGER format_version
+        BLOB data
+        INTEGER byte_length
+    }
+
     requests ||--|| request_payloads : "has payload"
+    requests ||--o{ websocket_transcript_chunks : "has websocket transcript"
 ```
 
 ## Core Tables
@@ -135,6 +148,12 @@ Important fields:
 Stores serialized request/response payload documents keyed by request id.
 
 This is intentionally separated from `requests` so summary queries stay small and fast.
+
+### `websocket_transcript_chunks`
+
+Stores append-only, provider-neutral WebSocket transcript chunks. Each chunk contains many ordered frame/lifecycle envelopes with direction and raw data. One WebSocket connection maps to one `requests` row and any number of chunks. Semantic classification is deliberately deferred until display time; transcript storage has no connection-wide size cap.
+
+The composite `(request_id, chunk_sequence)` key makes close retries idempotent, supports bounded ordered range reads for full NDJSON debug exports, and the foreign key cascades transcript removal when its request is deleted.
 
 ### `auth_sessions`
 
@@ -263,15 +282,18 @@ The most important normal write paths are:
 1. account creation/update through API or TUI
 2. request summaries written to `requests`
 3. payload persistence written to `request_payloads`
-4. auth-session state written to `auth_sessions`
-5. token refresh, rate-limit, and session state written back to `accounts`
+4. WebSocket frames appended in batches to `websocket_transcript_chunks`
+5. auth-session state written to `auth_sessions`
+6. token refresh, rate-limit, and session state written back to `accounts`
 
 ## Maintenance
 
 The runtime performs one-shot startup maintenance:
 
+- reconcile WebSocket rows interrupted by a previous process
 - cleanup of old requests/payloads based on retention settings
-- database compaction
+
+Database compaction is explicit rather than automatic so startup does not rewrite a potentially large transcript database.
 
 Manual maintenance is also available through the HTTP API and dashboard:
 
@@ -281,7 +303,9 @@ Manual maintenance is also available through the HTTP API and dashboard:
 Retention is configured separately for:
 
 - request metadata
-- request/response payloads
+- request/response payloads and closed WebSocket transcript chunks
+
+Active WebSocket requests are not removed by age. At startup, rows left open by a previous process are marked interrupted before retention cleanup runs. Closed WebSocket retention is measured from effective close time rather than connection-open time.
 
 ## Practical Guidance
 

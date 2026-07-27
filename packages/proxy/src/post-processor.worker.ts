@@ -82,8 +82,10 @@ const tokenEncoder = get_encoding("cl100k_base");
 // Module-level TextDecoder for streaming SSE decode (avoids per-chunk allocation)
 const streamDecoder = new TextDecoder("utf-8", { fatal: false });
 
-// Initialize database connection for worker
-const dbOps = new DatabaseOperations();
+// The primary runtime connection finishes schema setup before starting this
+// worker. Avoid rerunning migrations here because schema writes can contend with
+// an active database long enough to trip the worker readiness timeout.
+const dbOps = new DatabaseOperations(undefined, { initializeSchema: false });
 const asyncWriter = new AsyncDbWriter();
 
 // Environment variables

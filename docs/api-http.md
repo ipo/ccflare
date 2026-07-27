@@ -702,9 +702,35 @@ Get detailed request information including payloads. Request and response bodies
 curl "http://localhost:8080/api/requests/detail?limit=10"
 ```
 
+#### GET /api/requests/:requestId/conversation
+
+Return the stored conversation for one request. The response depends on the request transport:
+
+- HTTP requests return the existing `application/json` array of request payloads in response-chain ancestor order.
+- WebSocket requests return a finite `application/x-ndjson` snapshot containing one raw `WebSocketTranscriptEntry` per line, ordered by persisted chunk and frame sequence.
+
+The WebSocket export flattens internal chunk boundaries while preserving lifecycle entries, direction, frame type, encoding, raw UTF-8 text, and base64 binary data. It has no total size cap and is streamed with bounded server memory. For an active connection, the response includes everything persisted when the export begins and then closes; use `/transcript/stream` to follow new frames live.
+
+WebSocket responses include `X-Ccflare-Conversation-Kind`, `X-Ccflare-Conversation-Active`, and, when data exists, first/last frame sequence headers. A known WebSocket request with no persisted entries returns `200` with an empty body.
+
+#### GET /api/requests/:requestId/transcript
+
+Return persisted transcript chunks for one WebSocket request. Chunks contain provider-neutral ordered entries with direction, timestamp, text/binary frame type, encoding, and raw data. Provider-specific interpretation is performed by consumers when displayed.
+
+Query parameters:
+
+- `after` — return entries after this frame sequence (default `0`)
+- `limit` — maximum chunk rows to return (default `100`, maximum `500`)
+
+The response includes transcript bounds, a continuation cursor, and whether the WebSocket request remains active.
+
+#### GET /api/requests/:requestId/transcript/stream
+
+Stream newly persisted chunks for one WebSocket request via SSE. Event IDs are the last frame sequence in each emitted chunk. Reconnects may use the standard `Last-Event-ID` header or an initial `after` query parameter. The endpoint replays persisted data before switching to live delivery and deduplicates by frame sequence.
+
 #### GET /api/requests/stream
 
-Stream real-time request events via Server-Sent Events (SSE).
+Stream real-time request events via Server-Sent Events (SSE). WebSocket connection start/final metadata appears here, while frame payloads use the request-scoped transcript stream.
 
 **Response:** SSE stream with request events
 

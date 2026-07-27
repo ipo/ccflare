@@ -11,3 +11,4 @@ export * from "./request";
 export * from "./request-events";
 export * from "./stats";
 export * from "./strategy";
+export * from "./websocket-transcript";

@@ -206,7 +206,8 @@ Responsibilities:
 - handle retry/failover
 - emit request events
 - normalize rate-limit metadata
-- enqueue background post-processing for usage extraction and payload storage
+- enqueue HTTP background post-processing for usage extraction and payload storage
+- persist WebSocket connections as live request rows with append-only raw transcript chunks
 
 ### Proxy Flow
 
@@ -323,12 +324,12 @@ The strategy is injected into the proxy context and may be rebuilt when config c
 
 ccflare pushes expensive observability work off the hot request path.
 
-Two main mechanisms:
+Two main mechanisms handle HTTP observability:
 
 - `AsyncDbWriter` for non-blocking DB writes
-- proxy post-processor worker for stream/websocket usage extraction and payload handling
+- proxy post-processor worker for HTTP stream usage extraction and payload handling
 
-This keeps request forwarding responsive while preserving detailed monitoring data.
+WebSocket transcripts use a separate main-process recorder. It captures provider-neutral bidirectional frame envelopes, persists them in ordered chunks, and publishes request-scoped live updates only after each chunk is durable. Semantic parsing is deferred to the UI so historical transcripts benefit from future parser improvements.
 
 ## User Interfaces
 

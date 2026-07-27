@@ -5,6 +5,7 @@ export * from "./constants";
 export * from "./formatters";
 export * from "./log-feed";
 export * from "./parsers/parse-conversation";
+export * from "./parsers/parse-websocket-transcript";
 export * from "./presenters";
 export * from "./request-presenters";
 export * from "./themes/index";

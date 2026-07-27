@@ -56,6 +56,11 @@ interface PersistRequestData extends RequestData {
 	payload?: unknown;
 }
 
+export interface RequestDetailRow extends RequestRow {
+	account_name: string | null;
+	payload_json: string | null;
+}
+
 export class RequestRepository extends BaseRepository<RequestData> {
 	saveMeta(
 		id: string,
@@ -307,6 +312,108 @@ export class RequestRepository extends BaseRepository<RequestData> {
 			LIMIT ?
 		`,
 			[limit],
+		);
+	}
+
+	listDetailRows(limit = 50): RequestDetailRow[] {
+		return this.query<RequestDetailRow>(
+			`
+				SELECT r.*, a.name AS account_name, rp.json AS payload_json
+				FROM requests r
+				LEFT JOIN accounts a ON r.account_used = a.id
+				LEFT JOIN request_payloads rp ON rp.id = r.id
+				ORDER BY r.timestamp DESC
+				LIMIT ?
+			`,
+			[limit],
+		);
+	}
+
+	findWithAccountName(requestId: string): RequestWithAccountName | null {
+		const row = this.get<RequestRow & { account_name: string | null }>(
+			`
+				SELECT r.*, a.name AS account_name
+				FROM requests r
+				LEFT JOIN accounts a ON r.account_used = a.id
+				WHERE r.id = ?
+			`,
+			[requestId],
+		);
+		if (!row || !isHttpMethod(row.method) || !isAccountProvider(row.provider)) {
+			return null;
+		}
+		return toRequestWithAccountName(row);
+	}
+
+	updateAccount(requestId: string, accountId: string | null): void {
+		this.run(`UPDATE requests SET account_used = ? WHERE id = ?`, [
+			accountId,
+			requestId,
+		]);
+	}
+
+	updateClientSessionId(
+		requestId: string,
+		clientSessionId: string | null,
+	): void {
+		this.run(`UPDATE requests SET client_session_id = ? WHERE id = ?`, [
+			clientSessionId,
+			requestId,
+		]);
+	}
+
+	finalizeWebSocket(
+		requestId: string,
+		success: boolean,
+		errorMessage: string | null,
+		responseTimeMs: number,
+		usage?: RequestData["usage"],
+	): void {
+		this.run(
+			`
+				UPDATE requests
+				SET success = ?, error_message = ?, response_time_ms = ?,
+					model = COALESCE(?, model),
+					prompt_tokens = COALESCE(?, prompt_tokens),
+					completion_tokens = COALESCE(?, completion_tokens),
+					total_tokens = COALESCE(?, total_tokens),
+					cost_usd = COALESCE(?, cost_usd),
+					input_tokens = COALESCE(?, input_tokens),
+					cache_read_input_tokens = COALESCE(?, cache_read_input_tokens),
+					cache_creation_input_tokens = COALESCE(?, cache_creation_input_tokens),
+					output_tokens = COALESCE(?, output_tokens),
+					reasoning_tokens = COALESCE(?, reasoning_tokens)
+				WHERE id = ? AND method = 'WS' AND success IS NULL
+			`,
+			[
+				success ? 1 : 0,
+				errorMessage,
+				responseTimeMs,
+				usage?.model ?? null,
+				usage?.promptTokens ?? null,
+				usage?.completionTokens ?? null,
+				usage?.totalTokens ?? null,
+				usage?.costUsd ?? null,
+				usage?.inputTokens ?? null,
+				usage?.cacheReadInputTokens ?? null,
+				usage?.cacheCreationInputTokens ?? null,
+				usage?.outputTokens ?? null,
+				usage?.reasoningTokens ?? null,
+				requestId,
+			],
+		);
+	}
+
+	markInterruptedWebSockets(now: number): number {
+		return this.runWithChanges(
+			`
+				UPDATE requests
+				SET success = 0,
+					error_message = COALESCE(error_message, 'WebSocket interrupted by server restart'),
+					response_time_ms = MAX(0, ? - timestamp)
+				WHERE method = 'WS' AND success IS NULL
+			`,
+			[now],
 		);
 	}
 
@@ -622,9 +729,18 @@ export class RequestRepository extends BaseRepository<RequestData> {
 	}
 
 	deleteOlderThan(cutoffTs: number): number {
-		return this.runWithChanges(`DELETE FROM requests WHERE timestamp < ?`, [
-			cutoffTs,
-		]);
+		return this.runWithChanges(
+			`
+				DELETE FROM requests
+				WHERE (method != 'WS' AND timestamp < ?)
+					OR (
+						method = 'WS'
+						AND success IS NOT NULL
+						AND timestamp + COALESCE(response_time_ms, 0) < ?
+					)
+			`,
+			[cutoffTs, cutoffTs],
+		);
 	}
 
 	clear(): number {

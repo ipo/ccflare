@@ -2,18 +2,22 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { estimateCostUSD, requestEvents } from "@ccflare/core";
+import { requestEvents } from "@ccflare/core";
 import { DatabaseFactory } from "@ccflare/database";
 import { CodexProvider, ProviderRegistry } from "@ccflare/providers";
 import {
-	getUsageWorker,
 	handleWebSocketUpgradeRequest,
 	type ProxyContext,
-	terminateUsageWorker,
 	type WebSocketProxyData,
+	WebSocketTranscriptRecorder,
 	websocketProxyHandler,
 } from "@ccflare/proxy";
-import type { Account, Request, RequestStreamEvent } from "@ccflare/types";
+import type {
+	Account,
+	Request,
+	RequestStreamEvent,
+	WebSocketTranscriptEntry,
+} from "@ccflare/types";
 import {
 	createCodexAccount,
 	decodeMessageData,
@@ -25,50 +29,21 @@ import {
 } from "./test-helpers/websocket";
 
 let tempDir: string | null = null;
+let recorder: WebSocketTranscriptRecorder | null = null;
 
-afterEach(async () => {
-	await terminateUsageWorker();
+afterEach(() => {
+	recorder?.dispose();
+	recorder = null;
 	globalThis.WebSocket = OriginalWebSocket;
 	FakeUpstreamWebSocket.reset();
 	DatabaseFactory.reset();
-
 	if (tempDir) {
 		rmSync(tempDir, { force: true, recursive: true });
 		tempDir = null;
 	}
-
 	delete process.env.ccflare_DB_PATH;
 	delete process.env.ccflare_CONFIG_PATH;
 });
-
-function createLargeResponseCompletedMessage(sizeBytes: number): string {
-	const oversizedInstructions = "x".repeat(sizeBytes);
-	return JSON.stringify({
-		type: "response.completed",
-		response: {
-			id: "resp_large",
-			model: "gpt-4o",
-			usage: {
-				input_tokens: 21,
-				output_tokens: 8,
-				total_tokens: 29,
-			},
-			output: [
-				{
-					type: "message",
-					role: "assistant",
-					content: [
-						{
-							type: "output_text",
-							text: "done",
-						},
-					],
-				},
-			],
-			instructions: oversizedInstructions,
-		},
-	});
-}
 
 function insertCodexAccount(account: Account): void {
 	DatabaseFactory.getInstance().createAccount({
@@ -85,6 +60,8 @@ function insertCodexAccount(account: Account): void {
 }
 
 function createProxyContext(): ProxyContext {
+	const dbOps = DatabaseFactory.getInstance();
+	recorder = new WebSocketTranscriptRecorder(dbOps);
 	return {
 		providerRegistry: new ProviderRegistry([new CodexProvider()]),
 		strategy: {
@@ -92,28 +69,73 @@ function createProxyContext(): ProxyContext {
 				return selectedAccounts;
 			},
 		},
-		dbOps: DatabaseFactory.getInstance(),
+		dbOps,
 		runtime: {
 			clientId: "test-client",
-			retry: {
-				attempts: 1,
-				delayMs: 0,
-				backoff: 1,
-			},
+			retry: { attempts: 1, delayMs: 0, backoff: 1 },
 			sessionDurationMs: 0,
 			port: 8080,
 		},
 		refreshInFlight: new Map(),
-		asyncWriter: {
-			enqueue() {},
-		},
-		usageWorker: getUsageWorker(),
+		asyncWriter: { enqueue() {} },
+		usageWorker: { postMessage() {} },
+		websocketRecorder: recorder,
 	} as unknown as ProxyContext;
 }
 
+async function openTestConnection(): Promise<{
+	ctx: ProxyContext;
+	downstream: FakeServerWebSocket;
+	capture: FakeUpstreamCapture;
+}> {
+	insertCodexAccount(createCodexAccount());
+	const ctx = createProxyContext();
+	const url = new URL("http://localhost:8080/v1/codex/responses");
+	let upgradeOptions:
+		| { headers?: HeadersInit; data?: WebSocketProxyData }
+		| undefined;
+	handleWebSocketUpgradeRequest(
+		new Request(url, {
+			method: "GET",
+			headers: { connection: "Upgrade", upgrade: "websocket" },
+		}),
+		url,
+		ctx,
+		{
+			upgrade(
+				_request: Request,
+				options?: { headers?: HeadersInit; data?: WebSocketProxyData },
+			) {
+				upgradeOptions = options;
+				return true;
+			},
+		} as unknown as Bun.Server<WebSocketProxyData>,
+	);
+	const downstream = new FakeServerWebSocket(
+		upgradeOptions?.data as WebSocketProxyData,
+	);
+	websocketProxyHandler.open?.(
+		downstream as unknown as Bun.ServerWebSocket<WebSocketProxyData>,
+	);
+	const capture = await waitFor(
+		() => FakeUpstreamWebSocket.captures[0] ?? null,
+		(value): value is FakeUpstreamCapture => value !== null,
+	);
+	return { ctx, downstream, capture };
+}
+
+function allTranscriptEntries(
+	ctx: ProxyContext,
+	requestId: string,
+): WebSocketTranscriptEntry[] {
+	return ctx.dbOps
+		.listWebSocketTranscriptChunks(requestId, 0, 10_000)
+		.flatMap((chunk) => chunk.entries);
+}
+
 describe("WebSocket request logging integration", () => {
-	it("logs websocket turns to request history and emits real-time request events", async () => {
-		tempDir = mkdtempSync(join(tmpdir(), "ccflare-websocket-logging-"));
+	it("persists one live connection row and its ordered bidirectional transcript", async () => {
+		tempDir = mkdtempSync(join(tmpdir(), "ccflare-websocket-transcript-"));
 		process.env.ccflare_DB_PATH = join(tempDir, "ccflare.db");
 		process.env.ccflare_CONFIG_PATH = join(tempDir, "ccflare.json");
 		DatabaseFactory.initialize();
@@ -121,439 +143,145 @@ describe("WebSocket request logging integration", () => {
 			FakeUpstreamWebSocket as unknown as typeof globalThis.WebSocket;
 
 		const events: RequestStreamEvent[] = [];
-		const handleRequestEvent = (event: RequestStreamEvent) => {
-			events.push(event);
-		};
-		requestEvents.on("event", handleRequestEvent);
-
+		const listener = (event: RequestStreamEvent) => events.push(event);
+		requestEvents.on("event", listener);
 		try {
-			insertCodexAccount(createCodexAccount());
-			const ctx = createProxyContext();
-			const url = new URL("http://localhost:8080/v1/codex/responses");
-			let upgradeOptions:
-				| {
-						headers?: HeadersInit;
-						data: WebSocketProxyData;
-				  }
-				| undefined;
-			handleWebSocketUpgradeRequest(
-				new Request(url, {
-					method: "GET",
-					headers: {
-						connection: "Upgrade",
-						upgrade: "websocket",
-					},
-				}),
-				url,
-				ctx,
-				{
-					upgrade(
-						_request: Request,
-						options?: { headers?: HeadersInit; data?: WebSocketProxyData },
-					) {
-						upgradeOptions = options as {
-							headers?: HeadersInit;
-							data: WebSocketProxyData;
-						};
-						return true;
-					},
-				} as unknown as Bun.Server<WebSocketProxyData>,
-			);
-			const downstream = new FakeServerWebSocket(
-				upgradeOptions?.data as WebSocketProxyData,
-			);
-			websocketProxyHandler.open?.(
-				downstream as unknown as Bun.ServerWebSocket<WebSocketProxyData>,
-			);
+			const { ctx, downstream, capture } = await openTestConnection();
+			const pending = ctx.dbOps.getRecentRequests(10);
+			expect(pending).toHaveLength(1);
+			expect(pending[0]).toMatchObject({ method: "WS", success: null });
 
-			const capture = await waitFor(
-				() => Promise.resolve(FakeUpstreamWebSocket.captures[0] ?? null),
-				(value): value is FakeUpstreamCapture => value !== null,
-			);
-
+			const clientFrame =
+				'{"type":"response.create","model":"gpt-4o","input":"hello"}';
 			websocketProxyHandler.message(
 				downstream as unknown as Bun.ServerWebSocket<WebSocketProxyData>,
-				'{"type":"response.create","model":"gpt-4o","input":"hello"}',
+				clientFrame,
 			);
-
 			await waitFor(
-				() => Promise.resolve(capture.sent[0] ?? null),
-				(value): value is string | Uint8Array | ArrayBuffer => value !== null,
+				() => capture.sent.length,
+				(length) => length === 1,
 			);
-			expect(decodeMessageData(capture.sent[0] as string)).toBe(
-				'{"type":"response.create","model":"gpt-4o","input":"hello"}',
-			);
+			expect(decodeMessageData(capture.sent[0])).toBe(clientFrame);
 
 			capture.socket.emitMessage(
-				'{"type":"response.created","response":{"id":"resp_ws","model":"gpt-4o"}}',
+				'{"type":"response.created","response":{"id":"resp_ws"}}',
 			);
 			capture.socket.emitMessage(
-				'{"type":"response.output_text.delta","delta":"Hello"}',
+				'{"type":"response.future_event","value":"preserve me"}',
+			);
+			capture.socket.emitMessage(new Uint8Array([1, 2, 3, 4]));
+			const interleavedClientFrame =
+				'{"type":"response.processed","response_id":"resp_ws"}';
+			websocketProxyHandler.message(
+				downstream as unknown as Bun.ServerWebSocket<WebSocketProxyData>,
+				interleavedClientFrame,
 			);
 			capture.socket.emitMessage(
 				'{"type":"response.completed","response":{"id":"resp_ws","model":"gpt-4o","usage":{"input_tokens":12,"output_tokens":4,"total_tokens":16}}}',
 			);
-
-			const dbOps = DatabaseFactory.getInstance();
-			const loggedRequest = await waitFor(
-				() => Promise.resolve(dbOps.getRecentRequests(1)[0] ?? null),
-				(request): request is Request =>
-					request !== null &&
-					request.model === "gpt-4o" &&
-					request.totalTokens === 16,
+			capture.socket.emitMessage(
+				'{"type":"response.completed","response":{"id":"resp_ws_2","model":"gpt-4o","usage":{"input_tokens":10,"output_tokens":2,"total_tokens":12,"input_tokens_details":{"cached_tokens":6},"output_tokens_details":{"reasoning_tokens":1}}}}',
 			);
-			if (!loggedRequest) {
-				throw new Error("Expected a logged websocket request");
-			}
-			expect(loggedRequest).toMatchObject({
-				method: "WS",
-				path: "/v1/codex/responses",
-				provider: "codex",
-				upstreamPath: "/responses",
-				statusCode: 101,
-				success: true,
+			await Bun.sleep(25);
+			websocketProxyHandler.close?.(
+				downstream as unknown as Bun.ServerWebSocket<WebSocketProxyData>,
+				1000,
+				"done",
+			);
+
+			const completed = await waitFor(
+				() => ctx.dbOps.getRecentRequests(10)[0] ?? null,
+				(request): request is Request => request?.success === true,
+			);
+			expect(ctx.dbOps.getRecentRequests(10)).toHaveLength(1);
+			expect(completed).toMatchObject({
 				model: "gpt-4o",
-				promptTokens: 12,
-				completionTokens: 4,
-				totalTokens: 16,
-				inputTokens: 12,
-				outputTokens: 4,
+				inputTokens: 16,
+				cacheReadInputTokens: 6,
+				outputTokens: 6,
+				reasoningTokens: 1,
+				totalTokens: 28,
 			});
-			expect(loggedRequest.costUsd).toBe(
-				await estimateCostUSD("gpt-4o", {
-					inputTokens: 12,
-					outputTokens: 4,
-				}),
+			const entries = allTranscriptEntries(ctx, completed.id);
+			expect(entries.map((entry) => entry.sequence)).toEqual(
+				entries.map((_, index) => index + 1),
 			);
-
-			const persistedPayload = await waitFor(
-				() =>
-					Promise.resolve(
-						dbOps.getRequestPayload(loggedRequest.id) as {
-							request: { body: string | null };
-							response: { body: string | null } | null;
-						} | null,
-					),
-				(
-					value,
-				): value is {
-					request: { body: string | null };
-					response: { body: string | null } | null;
-				} => value !== null,
+			const binarySequence = entries.find(
+				(entry) => entry.frameType === "binary",
+			)?.sequence;
+			const interleavedClientSequence = entries.find(
+				(entry) => entry.data === interleavedClientFrame,
+			)?.sequence;
+			expect(binarySequence).toBeNumber();
+			expect(interleavedClientSequence).toBeNumber();
+			expect(binarySequence as number).toBeLessThan(
+				interleavedClientSequence as number,
 			);
-			if (!persistedPayload) {
-				throw new Error("Expected persisted websocket payload");
-			}
-			expect(
-				Buffer.from(persistedPayload.request.body as string, "base64").toString(
-					"utf8",
-				),
-			).toBe('{"type":"response.create","model":"gpt-4o","input":"hello"}');
-			expect(
-				Buffer.from(
-					persistedPayload.response?.body as string,
-					"base64",
-				).toString("utf8"),
-			).toContain("event: response.completed");
-
+			expect(entries).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({
+						direction: "client_to_upstream",
+						frameType: "text",
+						data: clientFrame,
+					}),
+					expect.objectContaining({
+						direction: "upstream_to_client",
+						data: expect.stringContaining("response.future_event"),
+					}),
+					expect.objectContaining({
+						direction: "upstream_to_client",
+						frameType: "binary",
+						encoding: "base64",
+						data: Buffer.from([1, 2, 3, 4]).toString("base64"),
+					}),
+				]),
+			);
 			await waitFor(
 				() =>
-					Promise.resolve(
-						events.some(
-							(event) =>
-								event.type === "summary" &&
-								event.payload.id === loggedRequest.id,
-						),
+					events.some(
+						(event) =>
+							event.type === "summary" && event.payload.id === completed.id,
 					),
 				Boolean,
 			);
-			expect(events).toContainEqual(
-				expect.objectContaining({
-					type: "start",
-					method: "WS",
-					path: "/v1/codex/responses",
-					statusCode: 101,
-				}),
-			);
-			expect(events).toContainEqual(
-				expect.objectContaining({
-					type: "summary",
-					payload: expect.objectContaining({
-						id: loggedRequest.id,
-						method: "WS",
-						model: "gpt-4o",
-						success: true,
-					}),
-				}),
-			);
 		} finally {
-			requestEvents.off("event", handleRequestEvent);
+			requestEvents.off("event", listener);
 		}
 	});
 
-	it("persists websocket token usage even when the model is missing", async () => {
-		tempDir = mkdtempSync(join(tmpdir(), "ccflare-websocket-logging-"));
+	it("stores a cumulative transcript larger than the HTTP stream payload cap", async () => {
+		tempDir = mkdtempSync(join(tmpdir(), "ccflare-websocket-transcript-"));
 		process.env.ccflare_DB_PATH = join(tempDir, "ccflare.db");
 		process.env.ccflare_CONFIG_PATH = join(tempDir, "ccflare.json");
 		DatabaseFactory.initialize();
 		globalThis.WebSocket =
 			FakeUpstreamWebSocket as unknown as typeof globalThis.WebSocket;
-
-		insertCodexAccount(createCodexAccount());
-		const ctx = createProxyContext();
-		const url = new URL("http://localhost:8080/v1/codex/responses");
-		let upgradeOptions:
-			| {
-					headers?: HeadersInit;
-					data: WebSocketProxyData;
-			  }
-			| undefined;
-		handleWebSocketUpgradeRequest(
-			new Request(url, {
-				method: "GET",
-				headers: {
-					connection: "Upgrade",
-					upgrade: "websocket",
-				},
-			}),
-			url,
-			ctx,
-			{
-				upgrade(
-					_request: Request,
-					options?: { headers?: HeadersInit; data?: WebSocketProxyData },
-				) {
-					upgradeOptions = options as {
-						headers?: HeadersInit;
-						data: WebSocketProxyData;
-					};
-					return true;
-				},
-			} as unknown as Bun.Server<WebSocketProxyData>,
-		);
-		const downstream = new FakeServerWebSocket(
-			upgradeOptions?.data as WebSocketProxyData,
-		);
-		websocketProxyHandler.open?.(
-			downstream as unknown as Bun.ServerWebSocket<WebSocketProxyData>,
-		);
-
-		const capture = await waitFor(
-			() => Promise.resolve(FakeUpstreamWebSocket.captures[0] ?? null),
-			(value): value is FakeUpstreamCapture => value !== null,
-		);
-
-		websocketProxyHandler.message(
-			downstream as unknown as Bun.ServerWebSocket<WebSocketProxyData>,
-			'{"type":"response.create","input":"hello without a model"}',
-		);
-
-		await waitFor(
-			() => Promise.resolve(capture.sent.length),
-			(length) => length > 0,
-		);
-
-		capture.socket.emitMessage(
-			'{"type":"response.created","response":{"id":"resp_missing_model"}}',
-		);
-		capture.socket.emitMessage(
-			'{"type":"response.output_text.delta","delta":"Hello"}',
-		);
-		capture.socket.emitMessage(
-			'{"type":"response.completed","response":{"id":"resp_missing_model","usage":{"input_tokens":7,"output_tokens":2,"total_tokens":9}}}',
-		);
-
-		const dbOps = DatabaseFactory.getInstance();
-		const loggedRequest = await waitFor(
-			() => Promise.resolve(dbOps.getRecentRequests(1)[0] ?? null),
-			(request): request is Request =>
-				request !== null && request.totalTokens === 9,
-		);
-
-		expect(loggedRequest).toMatchObject({
-			model: "unknown",
-			totalTokens: 9,
-			inputTokens: 7,
-			outputTokens: 2,
-			costUsd: 0,
-		});
-	});
-
-	it("persists cached input token discounts and reasoning tokens from websocket usage", async () => {
-		tempDir = mkdtempSync(join(tmpdir(), "ccflare-websocket-logging-"));
-		process.env.ccflare_DB_PATH = join(tempDir, "ccflare.db");
-		process.env.ccflare_CONFIG_PATH = join(tempDir, "ccflare.json");
-		DatabaseFactory.initialize();
-		globalThis.WebSocket =
-			FakeUpstreamWebSocket as unknown as typeof globalThis.WebSocket;
-
-		insertCodexAccount(createCodexAccount());
-		const ctx = createProxyContext();
-		const url = new URL("http://localhost:8080/v1/codex/responses");
-		let upgradeOptions:
-			| {
-					headers?: HeadersInit;
-					data: WebSocketProxyData;
-			  }
-			| undefined;
-		handleWebSocketUpgradeRequest(
-			new Request(url, {
-				method: "GET",
-				headers: {
-					connection: "Upgrade",
-					upgrade: "websocket",
-				},
-			}),
-			url,
-			ctx,
-			{
-				upgrade(
-					_request: Request,
-					options?: { headers?: HeadersInit; data?: WebSocketProxyData },
-				) {
-					upgradeOptions = options as {
-						headers?: HeadersInit;
-						data: WebSocketProxyData;
-					};
-					return true;
-				},
-			} as unknown as Bun.Server<WebSocketProxyData>,
-		);
-		const downstream = new FakeServerWebSocket(
-			upgradeOptions?.data as WebSocketProxyData,
-		);
-		websocketProxyHandler.open?.(
-			downstream as unknown as Bun.ServerWebSocket<WebSocketProxyData>,
-		);
-
-		const capture = await waitFor(
-			() => Promise.resolve(FakeUpstreamWebSocket.captures[0] ?? null),
-			(value): value is FakeUpstreamCapture => value !== null,
-		);
-
-		websocketProxyHandler.message(
-			downstream as unknown as Bun.ServerWebSocket<WebSocketProxyData>,
-			'{"type":"response.create","model":"gpt-4o","input":"cached hello"}',
-		);
-
-		await waitFor(
-			() => Promise.resolve(capture.sent.length),
-			(length) => length > 0,
-		);
-
-		capture.socket.emitMessage(
-			'{"type":"response.created","response":{"id":"resp_cached","model":"gpt-4o"}}',
-		);
-		capture.socket.emitMessage(
-			'{"type":"response.completed","response":{"id":"resp_cached","model":"gpt-4o","usage":{"input_tokens":18815,"output_tokens":431,"total_tokens":19246,"input_tokens_details":{"cached_tokens":18688},"output_tokens_details":{"reasoning_tokens":321}}}}',
-		);
-
-		const dbOps = DatabaseFactory.getInstance();
-		const loggedRequest = await waitFor(
-			() => Promise.resolve(dbOps.getRecentRequests(1)[0] ?? null),
-			(request): request is Request =>
-				request !== null && request.totalTokens === 19246,
-		);
-		if (!loggedRequest) {
-			throw new Error("Expected websocket request with cached token usage");
+		const { ctx, downstream, capture } = await openTestConnection();
+		const payload = "x".repeat(10 * 1024);
+		for (let index = 0; index < 220; index++) {
+			capture.socket.emitMessage(
+				JSON.stringify({ type: "response.delta", index, payload }),
+			);
 		}
-
-		expect(loggedRequest).toMatchObject({
-			model: "gpt-4o",
-			inputTokens: 127,
-			cacheReadInputTokens: 18688,
-			outputTokens: 431,
-			reasoningTokens: 321,
-			totalTokens: 19246,
-		});
-		expect(loggedRequest.costUsd).toBe(
-			await estimateCostUSD("gpt-4o", {
-				inputTokens: 127,
-				cacheReadInputTokens: 18688,
-				outputTokens: 431,
-			}),
-		);
-	});
-
-	it("persists websocket token usage when response.completed exceeds the SSE usage buffer", async () => {
-		tempDir = mkdtempSync(join(tmpdir(), "ccflare-websocket-logging-"));
-		process.env.ccflare_DB_PATH = join(tempDir, "ccflare.db");
-		process.env.ccflare_CONFIG_PATH = join(tempDir, "ccflare.json");
-		DatabaseFactory.initialize();
-		globalThis.WebSocket =
-			FakeUpstreamWebSocket as unknown as typeof globalThis.WebSocket;
-
-		insertCodexAccount(createCodexAccount());
-		const ctx = createProxyContext();
-		const url = new URL("http://localhost:8080/v1/codex/responses");
-		let upgradeOptions:
-			| {
-					headers?: HeadersInit;
-					data: WebSocketProxyData;
-			  }
-			| undefined;
-		handleWebSocketUpgradeRequest(
-			new Request(url, {
-				method: "GET",
-				headers: {
-					connection: "Upgrade",
-					upgrade: "websocket",
-				},
-			}),
-			url,
-			ctx,
-			{
-				upgrade(
-					_request: Request,
-					options?: { headers?: HeadersInit; data?: WebSocketProxyData },
-				) {
-					upgradeOptions = options as {
-						headers?: HeadersInit;
-						data: WebSocketProxyData;
-					};
-					return true;
-				},
-			} as unknown as Bun.Server<WebSocketProxyData>,
-		);
-		const downstream = new FakeServerWebSocket(
-			upgradeOptions?.data as WebSocketProxyData,
-		);
-		websocketProxyHandler.open?.(
+		await Bun.sleep(100);
+		websocketProxyHandler.close?.(
 			downstream as unknown as Bun.ServerWebSocket<WebSocketProxyData>,
+			1000,
+			"done",
 		);
-
-		const capture = await waitFor(
-			() => Promise.resolve(FakeUpstreamWebSocket.captures[0] ?? null),
-			(value): value is FakeUpstreamCapture => value !== null,
+		const completed = await waitFor(
+			() => ctx.dbOps.getRecentRequests(1)[0] ?? null,
+			(request): request is Request => request?.success === true,
+			5_000,
 		);
-
-		websocketProxyHandler.message(
-			downstream as unknown as Bun.ServerWebSocket<WebSocketProxyData>,
-			'{"type":"response.create","model":"gpt-4o","input":"hello"}',
+		const entries = allTranscriptEntries(ctx, completed.id).filter(
+			(entry) => entry.direction === "upstream_to_client",
 		);
-
-		await waitFor(
-			() => Promise.resolve(capture.sent.length),
-			(length) => length > 0,
-		);
-
-		capture.socket.emitMessage(
-			'{"type":"response.created","response":{"id":"resp_large","model":"gpt-4o"}}',
-		);
-		capture.socket.emitMessage(createLargeResponseCompletedMessage(350 * 1024));
-
-		const dbOps = DatabaseFactory.getInstance();
-		const loggedRequest = await waitFor(
-			() => Promise.resolve(dbOps.getRecentRequests(1)[0] ?? null),
-			(request): request is Request =>
-				request !== null && request.totalTokens === 29,
-		);
-
-		expect(loggedRequest).toMatchObject({
-			model: "gpt-4o",
-			totalTokens: 29,
-			inputTokens: 21,
-			outputTokens: 8,
-		});
+		expect(entries).toHaveLength(220);
+		expect(
+			ctx.dbOps
+				.listWebSocketTranscriptChunks(completed.id, 0, 10_000)
+				.reduce((sum, chunk) => sum + chunk.byteLength, 0),
+		).toBeGreaterThan(2 * 1024 * 1024);
 	});
 });

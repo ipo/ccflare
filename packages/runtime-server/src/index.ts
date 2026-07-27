@@ -4,6 +4,7 @@ import { DatabaseFactory } from "@ccflare/database";
 import { Logger, LogLevel } from "@ccflare/logger";
 import { providerRegistry } from "@ccflare/providers";
 import {
+	closeAllWebSocketProxySessions,
 	terminateUsageWorker,
 	waitForProxyBackgroundTasks,
 	websocketProxyHandler,
@@ -73,6 +74,7 @@ async function stopServerRuntime(): Promise<void> {
 		}
 
 		stopRetentionMaintenance();
+		closeAllWebSocketProxySessions();
 
 		try {
 			await waitForProxyBackgroundTasks();

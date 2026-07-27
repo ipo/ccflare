@@ -31,6 +31,7 @@ import {
 import { Label } from "./ui/label";
 import { Switch } from "./ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
+import { WebSocketTranscriptView } from "./WebSocketTranscriptView";
 
 interface RequestDetailsModalProps {
 	request: RequestPayload;
@@ -49,6 +50,7 @@ export function RequestDetailsModal({
 	const [linebreakMode, setLinebreakMode] = useState(false);
 	const [activeTab, setActiveTab] = useState("conversation");
 	const [expanded, setExpanded] = useState(false);
+	const isWebSocket = request.meta.trace.method === "WS";
 	const {
 		data: conversationChain = [],
 		isLoading: conversationLoading,
@@ -56,7 +58,7 @@ export function RequestDetailsModal({
 	} = useQuery({
 		queryKey: queryKeys.requestConversation(request.id),
 		queryFn: () => api.getRequestConversation(request.id),
-		enabled: isOpen,
+		enabled: isOpen && !isWebSocket,
 	});
 	const conversationEntries = useMemo(
 		() =>
@@ -84,7 +86,9 @@ export function RequestDetailsModal({
 		}
 	};
 
-	const conversationContent = conversationLoading ? (
+	const conversationContent = isWebSocket ? (
+		<WebSocketTranscriptView requestId={request.id} />
+	) : conversationLoading ? (
 		<div className="flex items-center justify-center h-32 text-muted-foreground">
 			Loading conversation...
 		</div>

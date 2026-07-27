@@ -33,6 +33,10 @@ import {
 } from "./handlers/requests";
 import { createRequestsStreamHandler } from "./handlers/requests-stream";
 import { createStatsHandler, createStatsResetHandler } from "./handlers/stats";
+import {
+	createWebSocketTranscriptPageHandler,
+	createWebSocketTranscriptStreamHandler,
+} from "./handlers/websocket-transcript";
 import type { APIContext } from "./types";
 
 type RouteHandler = (
@@ -102,6 +106,10 @@ export class APIRouter {
 		const requestsDetailHandler = createRequestsDetailHandler(dbOps);
 		const requestsConversationHandler =
 			createRequestsConversationHandler(dbOps);
+		const websocketTranscriptPageHandler =
+			createWebSocketTranscriptPageHandler(dbOps);
+		const websocketTranscriptStreamHandler =
+			createWebSocketTranscriptStreamHandler(dbOps);
 		const configHandlers = createConfigHandlers(config);
 		const logsStreamHandler = createLogsStreamHandler();
 		const logsHistoryHandler = createLogsHistoryHandler();
@@ -164,6 +172,18 @@ export class APIRouter {
 			"GET",
 			"/api/requests/:requestId/conversation",
 			(_req, _url, params) => requestsConversationHandler(params.requestId),
+		);
+		this.addDynamicRoute(
+			"GET",
+			"/api/requests/:requestId/transcript",
+			(_req, url, params) =>
+				websocketTranscriptPageHandler(params.requestId, url),
+		);
+		this.addDynamicRoute(
+			"GET",
+			"/api/requests/:requestId/transcript/stream",
+			(req, url, params) =>
+				websocketTranscriptStreamHandler(params.requestId, req, url),
 		);
 		this.staticHandlers.set("GET:/api/requests/stream", () =>
 			requestsStreamHandler(),

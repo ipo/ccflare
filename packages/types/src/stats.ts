@@ -104,9 +104,18 @@ export interface UsageWorkerHealth {
 	lastError: string | null;
 }
 
+export interface WebSocketRecorderHealth {
+	healthy: boolean;
+	failureCount: number;
+	activeSessions: number;
+	bufferedEntries: number;
+	lastError: string | null;
+}
+
 export interface RuntimeHealth {
 	asyncWriter: AsyncWriterHealth;
 	usageWorker: UsageWorkerHealth;
+	websocketRecorder?: WebSocketRecorderHealth;
 }
 
 export interface AnalyticsResponse {

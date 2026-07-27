@@ -19,7 +19,7 @@ import {
 	User,
 	X,
 } from "lucide-react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useRequestsPageModel } from "../hooks/useRequestsPageModel";
 import { getStatusCodeTextClass } from "../lib/request-status";
@@ -56,7 +56,7 @@ export function RequestsTab({ sessionId }: { sessionId?: string }) {
 	const [expandedRequests, setExpandedRequests] = useState<Set<string>>(
 		new Set(),
 	);
-	const [modalRequest, setModalRequest] = useState<RequestPayload | null>(null);
+	const [modalRequestId, setModalRequestId] = useState<string | null>(null);
 	const [showFilters, setShowFilters] = useState(false);
 
 	const {
@@ -80,6 +80,16 @@ export function RequestsTab({ sessionId }: { sessionId?: string }) {
 		error,
 		refetch: loadRequests,
 	} = useRequestsPageModel(200, sessionId);
+	const lastModalRequest = useRef<RequestPayload | null>(null);
+	const liveModalRequest = modalRequestId
+		? (allRequests.find((request) => request.id === modalRequestId) ?? null)
+		: null;
+	if (liveModalRequest) lastModalRequest.current = liveModalRequest;
+	const modalRequest =
+		liveModalRequest ??
+		(modalRequestId && lastModalRequest.current?.id === modalRequestId
+			? lastModalRequest.current
+			: null);
 
 	const toggleExpanded = (id: string) => {
 		setExpandedRequests((prev) => {
@@ -450,7 +460,10 @@ export function RequestsTab({ sessionId }: { sessionId?: string }) {
 					<div className="space-y-2">
 						{requests.map((request) => {
 							const isExpanded = expandedRequests.has(request.id);
-							const isError = request.error || !request.meta.transport.success;
+							const isError =
+								!request.meta.transport.pending &&
+								(Boolean(request.error) ||
+									request.meta.transport.success === false);
 							const statusCode = request.response?.status;
 							const summary = summaries.get(request.id);
 
@@ -582,7 +595,7 @@ export function RequestsTab({ sessionId }: { sessionId?: string }) {
 										<Button
 											variant="ghost"
 											size="icon"
-											onClick={() => setModalRequest(request)}
+											onClick={() => setModalRequestId(request.id)}
 											title="View Details"
 										>
 											<Eye className="h-4 w-4" />
@@ -628,7 +641,7 @@ export function RequestsTab({ sessionId }: { sessionId?: string }) {
 											<Button
 												variant="outline"
 												size="sm"
-												onClick={() => setModalRequest(request)}
+												onClick={() => setModalRequestId(request.id)}
 												className="w-full"
 											>
 												<Eye className="h-4 w-4 mr-2" />
@@ -648,7 +661,7 @@ export function RequestsTab({ sessionId }: { sessionId?: string }) {
 					request={modalRequest}
 					summary={summaries.get(modalRequest.id)}
 					isOpen={true}
-					onClose={() => setModalRequest(null)}
+					onClose={() => setModalRequestId(null)}
 				/>
 			)}
 		</Card>

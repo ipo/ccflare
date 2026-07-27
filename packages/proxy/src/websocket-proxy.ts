@@ -1,8 +1,12 @@
-import { requestEvents } from "@ccflare/core";
+import { estimateCostUSD, requestEvents } from "@ccflare/core";
 import { sanitizeRequestHeaders } from "@ccflare/http";
 import { Logger } from "@ccflare/logger";
 import type { Account, AccountProvider } from "@ccflare/types";
-import { extractClientSessionIdFromHeaders } from "@ccflare/types";
+import {
+	extractClientSessionIdFromHeaders,
+	toRequestSummary,
+} from "@ccflare/types";
+import { trackProxyBackgroundTask } from "./background-tasks";
 import { selectAccountsForRequest } from "./handlers/account-selector";
 import type {
 	ProxyContext,
@@ -11,13 +15,7 @@ import type {
 import { resolveProxyContext } from "./handlers/proxy-types";
 import { createRequestMetadata } from "./handlers/request-handler";
 import { getValidAccessToken } from "./handlers/token-manager";
-import { normalizeOpenAIUsage, type OpenAIUsagePayload } from "./openai-usage";
-import type {
-	ChunkMessage,
-	EndMessage,
-	PreExtractedUsage,
-	StartMessage,
-} from "./worker-messages";
+import { normalizeOpenAIUsage, parseOpenAIUsagePayload } from "./openai-usage";
 
 const log = new Logger("WebSocketProxy");
 const CONNECT_TIMEOUT_MS = 5_000;
@@ -27,11 +25,16 @@ const CLOSE_CODE_INTERNAL_ERROR = 1_011;
 const CLOSE_CODE_TRY_AGAIN_LATER = 1_013;
 
 type WebSocketMessageData = string | Uint8Array | ArrayBuffer;
-type WebSocketTurnState = {
-	requestId: string;
-	timestamp: number;
-	model?: string;
-	usage?: PreExtractedUsage;
+
+type WebSocketUsageAggregate = {
+	models: Set<string>;
+	inputTokens: number;
+	cacheReadInputTokens: number;
+	cacheCreationInputTokens: number;
+	outputTokens: number;
+	reasoningTokens: number;
+	totalTokens: number;
+	costPromises: Promise<number>[];
 };
 
 export interface WebSocketProxyPlan {
@@ -43,6 +46,9 @@ export interface WebSocketProxyPlan {
 }
 
 export interface WebSocketProxySession {
+	requestId: string;
+	sessionId: string;
+	openedAt: number;
 	path: string;
 	providerName: AccountProvider;
 	upstreamPath: string;
@@ -57,10 +63,12 @@ export interface WebSocketProxySession {
 	connecting: boolean;
 	downstreamClosed: boolean;
 	closed: boolean;
-	activeTurn: WebSocketTurnState | null;
+	finalizing: boolean;
+	finalized: boolean;
+	finalizeAttempts: number;
 	connectedAccount: Account | null;
-	pendingRequestBody: string | null;
-	pendingRequestTimestamp: number | null;
+	upstreamMessageChain: Promise<void>;
+	usage: WebSocketUsageAggregate;
 }
 
 export interface WebSocketProxyData {
@@ -68,31 +76,30 @@ export interface WebSocketProxyData {
 }
 
 const websocketSessions = new Map<string, WebSocketProxySession>();
-const textEncoder = new TextEncoder();
 
 function sanitizeWebSocketRequestHeaders(original: Headers): Headers {
 	const headers = new Headers(original);
-
-	headers.delete("connection");
-	headers.delete("content-length");
-	headers.delete("host");
-	headers.delete("sec-websocket-key");
-	headers.delete("sec-websocket-version");
-	headers.delete("upgrade");
-
+	for (const name of [
+		"connection",
+		"content-length",
+		"host",
+		"sec-websocket-key",
+		"sec-websocket-version",
+		"upgrade",
+	]) {
+		headers.delete(name);
+	}
 	return headers;
 }
 
 function getProtocols(headers: Headers): string[] {
 	const value = headers.get("sec-websocket-protocol");
-	if (!value) {
-		return [];
-	}
-
 	return value
-		.split(",")
-		.map((protocol) => protocol.trim())
-		.filter(Boolean);
+		? value
+				.split(",")
+				.map((protocol) => protocol.trim())
+				.filter(Boolean)
+		: [];
 }
 
 function toWebSocketUrl(targetUrl: string): string {
@@ -104,26 +111,19 @@ function toWebSocketUrl(targetUrl: string): string {
 function cloneMessageData(
 	message: string | Buffer<ArrayBuffer>,
 ): WebSocketMessageData {
-	if (typeof message === "string") {
-		return message;
-	}
-
-	return new Uint8Array(message);
+	return typeof message === "string" ? message : new Uint8Array(message);
 }
 
 function normalizeCloseCode(
 	code: number | undefined,
 	fallback = CLOSE_CODE_INTERNAL_ERROR,
 ): number {
-	if (typeof code !== "number" || !Number.isInteger(code)) {
-		return fallback;
-	}
-
-	if (code === 0 || code < CLOSE_CODE_NORMAL || code >= 5_000) {
-		return fallback;
-	}
-
-	return code;
+	return typeof code === "number" &&
+		Number.isInteger(code) &&
+		code >= CLOSE_CODE_NORMAL &&
+		code < 5_000
+		? code
+		: fallback;
 }
 
 function closeDownstream(
@@ -131,9 +131,7 @@ function closeDownstream(
 	code: number,
 	reason: string,
 ): void {
-	if (ws.readyState === WebSocket.OPEN) {
-		ws.close(code, reason);
-	}
+	if (ws.readyState === WebSocket.OPEN) ws.close(code, reason);
 }
 
 function closeUpstream(
@@ -143,308 +141,284 @@ function closeUpstream(
 ): void {
 	const upstream = session.upstream;
 	session.upstream = null;
-
-	if (!upstream) {
-		return;
-	}
-
 	if (
-		upstream.readyState === WebSocket.CONNECTING ||
-		upstream.readyState === WebSocket.OPEN
+		upstream &&
+		(upstream.readyState === WebSocket.CONNECTING ||
+			upstream.readyState === WebSocket.OPEN)
 	) {
 		upstream.close(code, reason);
 	}
 }
 
 function clearConnectTimeout(session: WebSocketProxySession): void {
-	if (session.connectTimeout) {
-		clearTimeout(session.connectTimeout);
-		session.connectTimeout = null;
-	}
+	if (!session.connectTimeout) return;
+	clearTimeout(session.connectTimeout);
+	session.connectTimeout = null;
 }
 
-function parseWebSocketJsonMessage(
-	data: string,
-): Record<string, unknown> | null {
-	try {
-		const parsed = JSON.parse(data);
-		return parsed && typeof parsed === "object" ? parsed : null;
-	} catch {
-		return null;
-	}
-}
-
-function getMessageType(parsed: Record<string, unknown>): string | null {
-	return typeof parsed.type === "string" ? parsed.type : null;
-}
-
-function getEventModel(parsed: Record<string, unknown>): string | undefined {
-	const response =
-		parsed.response && typeof parsed.response === "object"
-			? (parsed.response as Record<string, unknown>)
-			: null;
-
-	if (response && typeof response.model === "string") {
-		return response.model;
-	}
-
-	return typeof parsed.model === "string" ? parsed.model : undefined;
-}
-
-function getResponseCompletedUsage(
-	parsed: Record<string, unknown>,
-): PreExtractedUsage | undefined {
-	const response =
-		parsed.response && typeof parsed.response === "object"
-			? (parsed.response as Record<string, unknown>)
-			: null;
-	const usage =
-		response?.usage && typeof response.usage === "object"
-			? (response.usage as Record<string, unknown>)
-			: null;
-
-	if (!usage) {
-		return undefined;
-	}
-
-	const preExtractedUsage = normalizeOpenAIUsage(usage as OpenAIUsagePayload);
-
-	return Object.keys(preExtractedUsage).length > 0
-		? preExtractedUsage
-		: undefined;
-}
-
-function createSyntheticSseChunk(
-	eventType: string,
-	payload: string,
-): Uint8Array {
-	return textEncoder.encode(`event: ${eventType}\ndata: ${payload}\n\n`);
-}
-
-function emitTurnStartEvent(
-	session: WebSocketProxySession,
-	requestId: string,
-	timestamp: number,
-): void {
-	requestEvents.emit("event", {
-		type: "start",
-		id: requestId,
-		timestamp,
-		method: "WS",
-		path: session.path,
-		accountId: session.connectedAccount?.id ?? null,
-		accountName: session.connectedAccount?.name ?? null,
-		statusCode: 101,
-		clientSessionId: extractClientSessionIdFromHeaders(session.requestHeaders),
-	});
-}
-
-function endActiveTurn(
-	session: WebSocketProxySession,
-	success: boolean,
-	error?: string,
-): void {
-	const activeTurn = session.activeTurn;
-	if (!activeTurn) {
-		return;
-	}
-
-	log.debug("Ending tracked websocket turn", {
-		requestId: activeTurn.requestId,
-		provider: session.providerName,
-		path: session.path,
-		model: activeTurn.model ?? null,
-		success,
-		error: error ?? null,
-		account: session.connectedAccount?.name ?? null,
-	});
-
-	const endMessage: EndMessage = {
-		type: "end",
-		requestId: activeTurn.requestId,
-		preExtractedUsage: activeTurn.usage,
-		preExtractedModel: activeTurn.model,
-		success,
-	};
-	if (error) {
-		endMessage.error = error;
-	}
-	session.requestContext.usageWorker.postMessage(endMessage);
-	session.activeTurn = null;
-}
-
-function startActiveTurn(
-	session: WebSocketProxySession,
-	messageType: string,
-	messageData: string,
-	parsed: Record<string, unknown>,
-): void {
-	if (messageType !== "response.created") {
-		return;
-	}
-
-	if (session.activeTurn) {
-		endActiveTurn(
-			session,
-			false,
-			"WebSocket turn was replaced before response.completed",
-		);
-	}
-
-	const requestId = crypto.randomUUID();
-	const timestamp = session.pendingRequestTimestamp ?? Date.now();
-	const startMessage: StartMessage = {
-		type: "start",
-		requestId,
-		accountId: session.connectedAccount?.id ?? null,
-		accountName: session.connectedAccount?.name ?? null,
-		method: "WS",
-		path: session.path,
-		upstreamPath: session.upstreamPath,
-		timestamp,
-		requestHeaders: session.requestHeaders,
-		requestBody: session.pendingRequestBody,
-		responseStatus: 101,
-		responseHeaders: {},
-		isStream: true,
-		providerName: session.providerName,
-		retryAttempt: 0,
-		failoverAttempts: Math.max(0, session.nextAccountIndex - 1),
-	};
-
-	session.activeTurn = {
-		requestId,
-		timestamp,
-		model: getEventModel(parsed),
-	};
-	log.debug("Starting tracked websocket turn", {
-		requestId,
-		provider: session.providerName,
-		path: session.path,
-		upstreamPath: session.upstreamPath,
-		messageType,
-		model: session.activeTurn.model ?? null,
-		account: session.connectedAccount?.name ?? null,
-		hasPendingRequestBody: session.pendingRequestBody !== null,
-	});
-	session.pendingRequestBody = null;
-	session.pendingRequestTimestamp = null;
-	session.requestContext.usageWorker.postMessage(startMessage);
-	emitTurnStartEvent(session, requestId, timestamp);
-
-	const chunkMessage: ChunkMessage = {
-		type: "chunk",
-		requestId,
-		data: createSyntheticSseChunk(messageType, messageData),
-	};
-	session.requestContext.usageWorker.postMessage(chunkMessage);
-}
-
-function handleTrackedUpstreamText(
-	session: WebSocketProxySession,
-	data: string,
-): void {
-	const parsed = parseWebSocketJsonMessage(data);
-	if (!parsed) {
-		return;
-	}
-
-	const messageType = getMessageType(parsed);
-	if (!messageType) {
-		return;
-	}
-
-	log.debug("Processing tracked websocket message", {
-		provider: session.providerName,
-		path: session.path,
-		messageType,
-		activeRequestId: session.activeTurn?.requestId ?? null,
-		activeModel: session.activeTurn?.model ?? null,
-	});
-
-	startActiveTurn(session, messageType, data, parsed);
-
-	const activeTurn = session.activeTurn;
-	if (!activeTurn) {
-		return;
-	}
-
-	if (!activeTurn.model) {
-		activeTurn.model = getEventModel(parsed);
-	}
-
-	if (messageType === "response.completed") {
-		activeTurn.usage = getResponseCompletedUsage(parsed);
-		activeTurn.model = getEventModel(parsed) ?? activeTurn.model;
-	}
-
-	if (messageType !== "response.created") {
-		const chunkMessage: ChunkMessage = {
-			type: "chunk",
-			requestId: activeTurn.requestId,
-			data: createSyntheticSseChunk(messageType, data),
-		};
-		session.requestContext.usageWorker.postMessage(chunkMessage);
-	}
-
-	if (messageType === "response.completed") {
-		endActiveTurn(session, true);
-	}
-}
-
-function capturePendingRequestBody(
+function recordClientFrame(
 	session: WebSocketProxySession,
 	message: WebSocketMessageData,
 ): void {
-	if (typeof message !== "string") {
-		return;
+	try {
+		if (typeof message === "string") {
+			session.requestContext.websocketRecorder.recordFrame(
+				session.requestId,
+				"client_to_upstream",
+				"text",
+				message,
+				"utf8",
+			);
+			return;
+		}
+		const bytes =
+			message instanceof ArrayBuffer
+				? new Uint8Array(message.slice(0))
+				: new Uint8Array(message).slice();
+		session.requestContext.websocketRecorder.recordFrame(
+			session.requestId,
+			"client_to_upstream",
+			"binary",
+			Buffer.from(bytes).toString("base64"),
+			"base64",
+		);
+	} catch (error) {
+		log.error("Failed to capture downstream WebSocket frame", error);
 	}
-
-	const parsed = parseWebSocketJsonMessage(message);
-	if (!parsed || getMessageType(parsed) !== "response.create") {
-		return;
-	}
-
-	session.pendingRequestBody = Buffer.from(message).toString("base64");
-	session.pendingRequestTimestamp = Date.now();
-	log.debug("Captured websocket request body for next tracked turn", {
-		provider: session.providerName,
-		path: session.path,
-		size: message.length,
-	});
 }
 
-async function forwardUpstreamMessage(
+function captureCompletedUsage(
+	session: WebSocketProxySession,
+	data: string,
+): void {
+	try {
+		const parsed = JSON.parse(data) as Record<string, unknown>;
+		if (parsed.type !== "response.completed") return;
+		const response =
+			parsed.response && typeof parsed.response === "object"
+				? (parsed.response as Record<string, unknown>)
+				: null;
+		if (!response) return;
+		const normalized = normalizeOpenAIUsage(
+			parseOpenAIUsagePayload(response.usage),
+		);
+		const model =
+			typeof response.model === "string" ? response.model : "unknown";
+		const inputTokens =
+			normalized.input_tokens ?? normalized.prompt_tokens ?? 0;
+		const cacheReadInputTokens = normalized.cache_read_input_tokens ?? 0;
+		const cacheCreationInputTokens =
+			normalized.cache_creation_input_tokens ?? 0;
+		const outputTokens =
+			normalized.output_tokens ?? normalized.completion_tokens ?? 0;
+		const reasoningTokens = normalized.reasoning_tokens ?? 0;
+		const totalTokens =
+			normalized.total_tokens ??
+			inputTokens +
+				cacheReadInputTokens +
+				cacheCreationInputTokens +
+				outputTokens;
+		session.usage.models.add(model);
+		session.usage.inputTokens += inputTokens;
+		session.usage.cacheReadInputTokens += cacheReadInputTokens;
+		session.usage.cacheCreationInputTokens += cacheCreationInputTokens;
+		session.usage.outputTokens += outputTokens;
+		session.usage.reasoningTokens += reasoningTokens;
+		session.usage.totalTokens += totalTokens;
+		session.usage.costPromises.push(
+			estimateCostUSD(
+				model,
+				{
+					inputTokens,
+					cacheReadInputTokens,
+					cacheCreationInputTokens,
+					outputTokens,
+				},
+				{ provider: session.providerName },
+			),
+		);
+	} catch {
+		// Transcript capture remains authoritative; analytics extraction is best-effort.
+	}
+}
+
+async function buildUsageSummary(session: WebSocketProxySession) {
+	if (session.usage.models.size === 0) return undefined;
+	const costs = await Promise.allSettled(session.usage.costPromises);
+	const costUsd = costs.reduce(
+		(sum, result) => sum + (result.status === "fulfilled" ? result.value : 0),
+		0,
+	);
+	const model =
+		session.usage.models.size === 1
+			? (session.usage.models.values().next().value ?? "unknown")
+			: "multiple";
+	return {
+		model,
+		promptTokens:
+			session.usage.inputTokens +
+			session.usage.cacheReadInputTokens +
+			session.usage.cacheCreationInputTokens,
+		completionTokens: session.usage.outputTokens,
+		totalTokens: session.usage.totalTokens,
+		costUsd,
+		inputTokens: session.usage.inputTokens,
+		cacheReadInputTokens: session.usage.cacheReadInputTokens,
+		cacheCreationInputTokens: session.usage.cacheCreationInputTokens,
+		outputTokens: session.usage.outputTokens,
+		reasoningTokens: session.usage.reasoningTokens,
+	};
+}
+
+async function captureAndForwardUpstreamMessage(
 	ws: Bun.ServerWebSocket<WebSocketProxyData>,
 	session: WebSocketProxySession,
 	data: unknown,
+	sequence: number | null,
+	observedAt: number,
 ): Promise<void> {
-	if (ws.readyState !== WebSocket.OPEN) {
-		return;
-	}
+	try {
+		if (typeof data === "string") {
+			if (sequence !== null) {
+				session.requestContext.websocketRecorder.recordReservedFrame(
+					session.requestId,
+					sequence,
+					"upstream_to_client",
+					"text",
+					data,
+					"utf8",
+					observedAt,
+				);
+			}
+			captureCompletedUsage(session, data);
+			if (ws.readyState === WebSocket.OPEN) ws.sendText(data);
+			return;
+		}
 
-	if (typeof data === "string") {
-		handleTrackedUpstreamText(session, data);
-		ws.sendText(data);
-		return;
-	}
+		let bytes: Uint8Array;
+		if (data instanceof Blob) {
+			bytes = new Uint8Array(await data.arrayBuffer());
+		} else if (data instanceof ArrayBuffer) {
+			bytes = new Uint8Array(data.slice(0));
+		} else if (ArrayBuffer.isView(data)) {
+			bytes = new Uint8Array(
+				data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength),
+			);
+		} else {
+			const text = String(data);
+			if (sequence !== null) {
+				session.requestContext.websocketRecorder.recordReservedFrame(
+					session.requestId,
+					sequence,
+					"upstream_to_client",
+					"text",
+					text,
+					"utf8",
+					observedAt,
+				);
+			}
+			if (ws.readyState === WebSocket.OPEN) ws.sendText(text);
+			return;
+		}
 
-	if (data instanceof Blob) {
-		ws.sendBinary(await data.arrayBuffer());
-		return;
+		if (sequence !== null) {
+			session.requestContext.websocketRecorder.recordReservedFrame(
+				session.requestId,
+				sequence,
+				"upstream_to_client",
+				"binary",
+				Buffer.from(bytes).toString("base64"),
+				"base64",
+				observedAt,
+			);
+		}
+		if (ws.readyState === WebSocket.OPEN) ws.sendBinary(bytes);
+	} catch (error) {
+		if (sequence !== null) {
+			session.requestContext.websocketRecorder.recordReservedFrame(
+				session.requestId,
+				sequence,
+				"upstream_to_client",
+				"text",
+				`[frame capture failed: ${error instanceof Error ? error.message : String(error)}]`,
+				"utf8",
+				observedAt,
+			);
+		}
+		log.error("Failed to capture or forward upstream WebSocket frame", error);
 	}
+}
 
-	if (data instanceof ArrayBuffer) {
-		ws.sendBinary(data);
-		return;
-	}
+function emitFinalSummary(session: WebSocketProxySession): void {
+	const request = session.requestContext.dbOps.getRequestWithAccountName(
+		session.requestId,
+	);
+	if (!request) return;
+	requestEvents.emit("event", {
+		type: "summary",
+		payload: {
+			...toRequestSummary(request),
+			accountName: request.accountName,
+		},
+	});
+}
 
-	if (ArrayBuffer.isView(data)) {
-		ws.sendBinary(data as unknown as Bun.BufferSource);
-		return;
-	}
-
-	ws.sendText(String(data));
+function scheduleFinalize(
+	session: WebSocketProxySession,
+	options: { success: boolean; errorMessage: string | null },
+): void {
+	if (session.finalizing || session.finalized) return;
+	session.finalizing = true;
+	session.requestContext.websocketRecorder.prepareFinalize(session.requestId);
+	const task = session.upstreamMessageChain
+		.catch((error) => {
+			log.error("WebSocket message chain failed before finalization", error);
+		})
+		.then(async () => {
+			const usage = await buildUsageSummary(session);
+			const request = session.requestContext.websocketRecorder.finalize(
+				session.requestId,
+				{
+					success: options.success,
+					errorMessage: options.errorMessage,
+					responseTimeMs: Math.max(0, Date.now() - session.openedAt),
+					usage,
+				},
+			);
+			if (!request) {
+				session.finalizeAttempts += 1;
+				session.finalizing = false;
+				const persisted =
+					session.requestContext.dbOps.getRequestWithAccountName(
+						session.requestId,
+					);
+				if (!persisted) {
+					session.requestContext.websocketRecorder.discard(session.requestId);
+					websocketSessions.delete(session.sessionId);
+					return;
+				}
+				if (session.finalizeAttempts < 3) {
+					const retryTask = new Promise<void>((resolve) => {
+						const retry = setTimeout(() => {
+							scheduleFinalize(session, options);
+							resolve();
+						}, 250);
+						retry.unref?.();
+					});
+					trackProxyBackgroundTask(retryTask);
+				} else {
+					// The recorder retains the unflushed chunk for its shutdown retry,
+					// but the closed transport session itself need not remain reachable.
+					websocketSessions.delete(session.sessionId);
+				}
+				return;
+			}
+			emitFinalSummary(session);
+			session.finalized = true;
+			session.finalizing = false;
+			websocketSessions.delete(session.sessionId);
+		});
+	trackProxyBackgroundTask(task);
 }
 
 async function flushPendingMessages(
@@ -452,10 +426,7 @@ async function flushPendingMessages(
 	session: WebSocketProxySession,
 ): Promise<void> {
 	const upstream = session.upstream;
-	if (!upstream || upstream.readyState !== WebSocket.OPEN) {
-		return;
-	}
-
+	if (!upstream || upstream.readyState !== WebSocket.OPEN) return;
 	while (
 		session.pendingMessages.length > 0 &&
 		upstream.readyState === WebSocket.OPEN &&
@@ -473,7 +444,6 @@ async function buildWebSocketPlan(
 ): Promise<WebSocketProxyPlan> {
 	const sanitizedHeaders = sanitizeWebSocketRequestHeaders(requestHeaders);
 	let requestAccount = account;
-
 	if (account) {
 		const accessToken = await getValidAccessToken(account, ctx);
 		requestAccount =
@@ -481,14 +451,12 @@ async function buildWebSocketPlan(
 				? account
 				: { ...account, access_token: accessToken };
 	}
-
 	const preparedHeaders = ctx.provider.prepareHeaders(
 		sanitizedHeaders,
 		requestAccount,
 	);
 	const protocols = getProtocols(preparedHeaders);
 	preparedHeaders.delete("sec-websocket-protocol");
-
 	return {
 		account,
 		accountName: account?.name ?? null,
@@ -504,16 +472,25 @@ async function connectToNextUpstream(
 	ws: Bun.ServerWebSocket<WebSocketProxyData>,
 ): Promise<void> {
 	const session = websocketSessions.get(ws.data.sessionId);
-	if (!session) {
+	if (
+		!session ||
+		session.closed ||
+		session.downstreamClosed ||
+		session.connecting
+	) {
 		return;
 	}
-	if (session.closed || session.downstreamClosed || session.connecting) {
-		return;
-	}
-
 	const account = session.candidateAccounts[session.nextAccountIndex];
 	if (account === undefined) {
 		session.closed = true;
+		session.requestContext.websocketRecorder.recordLifecycle(
+			session.requestId,
+			"upstream_unavailable",
+		);
+		scheduleFinalize(session, {
+			success: false,
+			errorMessage: "Unable to connect to an upstream websocket",
+		});
 		closeDownstream(
 			ws,
 			CLOSE_CODE_TRY_AGAIN_LATER,
@@ -524,6 +501,11 @@ async function connectToNextUpstream(
 
 	session.nextAccountIndex += 1;
 	session.connecting = true;
+	session.requestContext.websocketRecorder.recordLifecycle(
+		session.requestId,
+		"upstream_connect_attempt",
+		{ accountId: account?.id ?? null, accountName: account?.name ?? null },
+	);
 
 	let plan: WebSocketProxyPlan;
 	try {
@@ -535,10 +517,11 @@ async function connectToNextUpstream(
 		);
 	} catch (error) {
 		session.connecting = false;
-		log.warn("Skipping websocket account during upstream connection", {
-			account: account?.name ?? null,
-			error: error instanceof Error ? error.message : String(error),
-		});
+		session.requestContext.websocketRecorder.recordLifecycle(
+			session.requestId,
+			"upstream_connect_error",
+			{ error: error instanceof Error ? error.message : String(error) },
+		);
 		await connectToNextUpstream(ws);
 		return;
 	}
@@ -549,19 +532,14 @@ async function connectToNextUpstream(
 	}
 
 	try {
-		const websocketOptions = {
-			headers: plan.headers,
-			protocols: plan.protocols,
-		};
 		const upstream = new (
 			WebSocket as unknown as new (
 				url: string,
 				options: Bun.WebSocketOptions,
 			) => WebSocket
-		)(plan.targetUrl, websocketOptions);
+		)(plan.targetUrl, { headers: plan.headers, protocols: plan.protocols });
 		upstream.binaryType = "arraybuffer";
 		session.upstream = upstream;
-
 		let opened = false;
 		const timeout = setTimeout(() => {
 			if (!opened && upstream.readyState === WebSocket.CONNECTING) {
@@ -579,39 +557,65 @@ async function connectToNextUpstream(
 			session.connecting = false;
 			session.connectedAccount = plan.account;
 			clearConnectTimeout(session);
-
+			session.requestContext.dbOps.updateWebSocketRequestAccount(
+				session.requestId,
+				plan.account?.id ?? null,
+			);
+			session.requestContext.websocketRecorder.recordLifecycle(
+				session.requestId,
+				"upstream_connected",
+				{ accountId: plan.account?.id ?? null, accountName: plan.accountName },
+			);
 			if (session.downstreamClosed) {
 				closeUpstream(session, CLOSE_CODE_NORMAL, "Downstream closed");
 				return;
 			}
-
 			void flushPendingMessages(ws, session);
 		});
 
 		upstream.addEventListener("message", (event) => {
-			void forwardUpstreamMessage(ws, session, event.data);
+			const observedAt = Date.now();
+			const sequence = session.requestContext.websocketRecorder.reserveSequence(
+				session.requestId,
+			);
+			session.upstreamMessageChain = session.upstreamMessageChain.then(() =>
+				captureAndForwardUpstreamMessage(
+					ws,
+					session,
+					event.data,
+					sequence,
+					observedAt,
+				),
+			);
 		});
 
 		upstream.addEventListener("close", (event) => {
 			session.connecting = false;
 			clearConnectTimeout(session);
-			session.connectedAccount = null;
-			if (session.upstream === upstream) {
-				session.upstream = null;
-			}
-
+			if (session.upstream === upstream) session.upstream = null;
 			if (!opened && !session.downstreamClosed) {
+				session.requestContext.websocketRecorder.recordLifecycle(
+					session.requestId,
+					"upstream_connect_closed",
+					{ code: event.code, reason: event.reason },
+				);
 				void connectToNextUpstream(ws);
 				return;
 			}
-
+			session.requestContext.websocketRecorder.recordLifecycle(
+				session.requestId,
+				"upstream_closed",
+				{ code: event.code, reason: event.reason },
+			);
 			if (!session.downstreamClosed) {
-				endActiveTurn(
-					session,
-					false,
-					event.reason || "Upstream websocket closed",
-				);
 				session.closed = true;
+				scheduleFinalize(session, {
+					success: event.code === CLOSE_CODE_NORMAL,
+					errorMessage:
+						event.code === CLOSE_CODE_NORMAL
+							? null
+							: event.reason || "Upstream websocket closed",
+				});
 				closeDownstream(
 					ws,
 					normalizeCloseCode(event.code, CLOSE_CODE_NORMAL),
@@ -621,6 +625,11 @@ async function connectToNextUpstream(
 		});
 
 		upstream.addEventListener("error", () => {
+			session.requestContext.websocketRecorder.recordLifecycle(
+				session.requestId,
+				"upstream_error",
+				{ accountName: plan.accountName },
+			);
 			log.warn("Upstream websocket error", {
 				account: plan.accountName,
 				provider: session.providerName,
@@ -630,32 +639,26 @@ async function connectToNextUpstream(
 	} catch (error) {
 		session.connecting = false;
 		clearConnectTimeout(session);
-		log.warn("Failed to create upstream websocket", {
-			account: plan.accountName,
-			error: error instanceof Error ? error.message : String(error),
-		});
+		session.requestContext.websocketRecorder.recordLifecycle(
+			session.requestId,
+			"upstream_create_error",
+			{ error: error instanceof Error ? error.message : String(error) },
+		);
 		await connectToNextUpstream(ws);
 	}
 }
 
 export function isWebSocketUpgradeRequest(req: Request): boolean {
-	if (req.method !== "GET") {
-		return false;
-	}
-
-	if (req.headers.get("upgrade")?.toLowerCase() !== "websocket") {
-		return false;
-	}
-
+	if (req.method !== "GET") return false;
+	if (req.headers.get("upgrade")?.toLowerCase() !== "websocket") return false;
 	const connection = req.headers.get("connection");
-	if (!connection) {
-		return true;
-	}
-
-	return connection
-		.toLowerCase()
-		.split(",")
-		.some((value) => value.trim() === "upgrade");
+	return (
+		!connection ||
+		connection
+			.toLowerCase()
+			.split(",")
+			.some((value) => value.trim() === "upgrade")
+	);
 }
 
 export function handleWebSocketUpgradeRequest(
@@ -664,15 +667,9 @@ export function handleWebSocketUpgradeRequest(
 	ctx: ProxyContext,
 	server: Bun.Server<WebSocketProxyData>,
 ): Response | undefined {
-	if (!isWebSocketUpgradeRequest(req)) {
-		return undefined;
-	}
-
+	if (!isWebSocketUpgradeRequest(req)) return undefined;
 	const requestContext = resolveProxyContext(url, ctx);
-	if (!requestContext) {
-		return new Response("Not Found", { status: 404 });
-	}
-
+	if (!requestContext) return new Response("Not Found", { status: 404 });
 	if (
 		!requestContext.provider.supportsWebSocket?.(requestContext.upstreamPath)
 	) {
@@ -686,6 +683,9 @@ export function handleWebSocketUpgradeRequest(
 	const protocols = getProtocols(req.headers);
 	const sessionId = crypto.randomUUID();
 	const session: WebSocketProxySession = {
+		requestId: crypto.randomUUID(),
+		sessionId,
+		openedAt: Date.now(),
 		path: url.pathname,
 		providerName: requestContext.providerName,
 		upstreamPath: requestContext.upstreamPath,
@@ -702,52 +702,138 @@ export function handleWebSocketUpgradeRequest(
 		connecting: false,
 		downstreamClosed: false,
 		closed: false,
-		activeTurn: null,
+		finalizing: false,
+		finalized: false,
+		finalizeAttempts: 0,
 		connectedAccount: null,
-		pendingRequestBody: null,
-		pendingRequestTimestamp: null,
+		upstreamMessageChain: Promise.resolve(),
+		usage: {
+			models: new Set(),
+			inputTokens: 0,
+			cacheReadInputTokens: 0,
+			cacheCreationInputTokens: 0,
+			outputTokens: 0,
+			reasoningTokens: 0,
+			totalTokens: 0,
+			costPromises: [],
+		},
 	};
 	websocketSessions.set(sessionId, session);
 	const upgraded = server.upgrade(req, {
 		headers:
 			protocols[0] !== undefined
-				? {
-						"Sec-WebSocket-Protocol": protocols[0],
-					}
+				? { "Sec-WebSocket-Protocol": protocols[0] }
 				: undefined,
 		data: { sessionId },
 	});
-
 	if (!upgraded) {
 		websocketSessions.delete(sessionId);
 		return new Response("WebSocket upgrade failed", { status: 400 });
 	}
-
 	return undefined;
+}
+
+export function closeAllWebSocketProxySessions(): void {
+	for (const session of websocketSessions.values()) {
+		if (session.finalized || session.finalizing) continue;
+		session.closed = true;
+		session.downstreamClosed = true;
+		clearConnectTimeout(session);
+		session.requestContext.websocketRecorder.recordLifecycle(
+			session.requestId,
+			"server_shutdown",
+		);
+		closeUpstream(session, CLOSE_CODE_TRY_AGAIN_LATER, "Server shutdown");
+		scheduleFinalize(session, {
+			success: false,
+			errorMessage: "WebSocket interrupted by server shutdown",
+		});
+	}
 }
 
 export const websocketProxyHandler: Bun.WebSocketHandler<WebSocketProxyData> = {
 	open(ws) {
-		void connectToNextUpstream(ws);
+		const session = websocketSessions.get(ws.data.sessionId);
+		if (!session) return;
+		try {
+			session.requestContext.dbOps.saveRequestMeta(
+				session.requestId,
+				"WS",
+				session.path,
+				session.providerName,
+				session.upstreamPath,
+				null,
+				101,
+				session.openedAt,
+			);
+			const clientSessionId = extractClientSessionIdFromHeaders(
+				session.requestHeaders,
+			);
+			session.requestContext.dbOps.updateWebSocketClientSessionId(
+				session.requestId,
+				clientSessionId,
+			);
+			session.requestContext.websocketRecorder.start(session.requestId);
+			session.requestContext.websocketRecorder.recordLifecycle(
+				session.requestId,
+				"connection_open",
+				{
+					path: session.path,
+					provider: session.providerName,
+					headers: session.requestHeaders,
+				},
+			);
+			requestEvents.emit("event", {
+				type: "start",
+				id: session.requestId,
+				timestamp: session.openedAt,
+				method: "WS",
+				path: session.path,
+				accountId: null,
+				accountName: null,
+				statusCode: 101,
+				clientSessionId,
+			});
+			void connectToNextUpstream(ws);
+		} catch (error) {
+			log.error("Failed to initialize WebSocket request history", error);
+			session.closed = true;
+			session.requestContext.websocketRecorder.discard(session.requestId);
+			websocketSessions.delete(session.sessionId);
+			closeDownstream(
+				ws,
+				CLOSE_CODE_INTERNAL_ERROR,
+				"Failed to initialize request history",
+			);
+		}
 	},
 	message(ws, message) {
 		const session = websocketSessions.get(ws.data.sessionId);
-		if (!session) {
-			return;
-		}
+		if (!session) return;
+		const captured = cloneMessageData(message);
+		recordClientFrame(session, captured);
 		if (session.closed || session.downstreamClosed) {
+			session.requestContext.websocketRecorder.recordLifecycle(
+				session.requestId,
+				"frame_not_forwarded",
+				{ reason: "connection_closed" },
+			);
 			return;
 		}
-
-		capturePendingRequestBody(session, message);
-
-		if (session.upstream && session.upstream.readyState === WebSocket.OPEN) {
+		if (session.upstream?.readyState === WebSocket.OPEN) {
 			session.upstream.send(message);
 			return;
 		}
-
 		if (session.pendingMessages.length >= PENDING_MESSAGE_LIMIT) {
 			session.closed = true;
+			session.requestContext.websocketRecorder.recordLifecycle(
+				session.requestId,
+				"pending_queue_exhausted",
+			);
+			scheduleFinalize(session, {
+				success: false,
+				errorMessage: "Downstream message queue limit reached",
+			});
 			closeUpstream(
 				session,
 				CLOSE_CODE_TRY_AGAIN_LATER,
@@ -760,25 +846,31 @@ export const websocketProxyHandler: Bun.WebSocketHandler<WebSocketProxyData> = {
 			);
 			return;
 		}
-
-		session.pendingMessages.push(cloneMessageData(message));
+		session.pendingMessages.push(captured);
 	},
 	close(ws, code, reason) {
 		const session = websocketSessions.get(ws.data.sessionId);
-		if (!session) {
-			return;
-		}
+		if (!session) return;
 		session.downstreamClosed = true;
 		session.closed = true;
 		session.pendingMessages.length = 0;
 		clearConnectTimeout(session);
-		session.connectedAccount = null;
-		endActiveTurn(session, false, reason || "Downstream websocket closed");
+		session.requestContext.websocketRecorder.recordLifecycle(
+			session.requestId,
+			"downstream_closed",
+			{ code, reason },
+		);
 		closeUpstream(
 			session,
 			normalizeCloseCode(code, CLOSE_CODE_NORMAL),
 			reason || "Downstream websocket closed",
 		);
-		websocketSessions.delete(ws.data.sessionId);
+		scheduleFinalize(session, {
+			success: code === CLOSE_CODE_NORMAL,
+			errorMessage:
+				code === CLOSE_CODE_NORMAL
+					? null
+					: reason || "Downstream websocket closed",
+		});
 	},
 };

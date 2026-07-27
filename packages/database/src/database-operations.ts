@@ -11,6 +11,7 @@ import type {
 	Request,
 	RequestSummary,
 	StrategyStore,
+	WebSocketTranscriptChunk,
 } from "@ccflare/types";
 import { ensureSchema, runMigrations } from "./migrations";
 import type { RequestWithAccountName } from "./models/request-row";
@@ -27,13 +28,20 @@ import {
 import { AuthSessionRepository } from "./repositories/auth-session.repository";
 import {
 	type RequestData,
+	type RequestDetailRow,
 	RequestRepository,
 } from "./repositories/request.repository";
 import { StatsRepository } from "./repositories/stats.repository";
 import { StrategyRepository } from "./repositories/strategy.repository";
+import { WebSocketTranscriptRepository } from "./repositories/websocket-transcript.repository";
 
 export interface RuntimeConfig {
 	sessionDurationMs?: number;
+}
+
+export interface DatabaseOperationsOptions {
+	/** The primary runtime connection owns schema setup and migrations. */
+	initializeSchema?: boolean;
 }
 
 /**
@@ -52,8 +60,9 @@ export class DatabaseOperations implements StrategyStore, Disposable {
 	private authSessions: AuthSessionRepository;
 	private strategy: StrategyRepository;
 	private stats: StatsRepository;
+	private websocketTranscripts: WebSocketTranscriptRepository;
 
-	constructor(dbPath?: string) {
+	constructor(dbPath?: string, options: DatabaseOperationsOptions = {}) {
 		const resolvedPath = dbPath ?? resolveDbPath();
 
 		// Ensure the directory exists
@@ -64,12 +73,14 @@ export class DatabaseOperations implements StrategyStore, Disposable {
 
 		// Configure SQLite for better concurrency
 		this.db.exec("PRAGMA foreign_keys = ON"); // Enforce declared foreign keys
-		this.db.exec("PRAGMA journal_mode = WAL"); // Enable Write-Ahead Logging
 		this.db.exec("PRAGMA busy_timeout = 5000"); // Wait up to 5 seconds before throwing "database is locked"
-		this.db.exec("PRAGMA synchronous = NORMAL"); // Better performance while maintaining safety
 
-		ensureSchema(this.db);
-		runMigrations(this.db);
+		if (options.initializeSchema !== false) {
+			this.db.exec("PRAGMA journal_mode = WAL"); // Enable Write-Ahead Logging once on the primary connection
+			this.db.exec("PRAGMA synchronous = NORMAL"); // Better performance while maintaining safety
+			ensureSchema(this.db);
+			runMigrations(this.db);
+		}
 
 		// Initialize repositories
 		this.accounts = new AccountRepository(this.db);
@@ -78,6 +89,7 @@ export class DatabaseOperations implements StrategyStore, Disposable {
 		this.authSessions = new AuthSessionRepository(this.db);
 		this.strategy = new StrategyRepository(this.db);
 		this.stats = new StatsRepository(this.db);
+		this.websocketTranscripts = new WebSocketTranscriptRepository(this.db);
 	}
 
 	setRuntimeConfig(runtime: RuntimeConfig): void {
@@ -299,6 +311,107 @@ export class DatabaseOperations implements StrategyStore, Disposable {
 		return this.requests.listPayloadsWithAccountNames(limit);
 	}
 
+	listRequestDetailRows(limit = 50): RequestDetailRow[] {
+		return this.requests.listDetailRows(limit);
+	}
+
+	getRequestWithAccountName(requestId: string): RequestWithAccountName | null {
+		return this.requests.findWithAccountName(requestId);
+	}
+
+	updateWebSocketRequestAccount(
+		requestId: string,
+		accountId: string | null,
+	): void {
+		this.requests.updateAccount(requestId, accountId);
+	}
+
+	updateWebSocketClientSessionId(
+		requestId: string,
+		clientSessionId: string | null,
+	): void {
+		this.requests.updateClientSessionId(requestId, clientSessionId);
+	}
+
+	appendWebSocketTranscriptChunks(chunks: WebSocketTranscriptChunk[]): void {
+		this.websocketTranscripts.appendChunks(chunks);
+	}
+
+	listWebSocketTranscriptChunks(
+		requestId: string,
+		afterFrameSequence = 0,
+		limit = 100,
+	): WebSocketTranscriptChunk[] {
+		return this.websocketTranscripts.listAfter(
+			requestId,
+			afterFrameSequence,
+			limit,
+		);
+	}
+
+	listWebSocketTranscriptChunkRange(
+		requestId: string,
+		fromChunkSequence: number,
+		throughChunkSequence: number,
+		limit: number,
+	): WebSocketTranscriptChunk[] {
+		return this.websocketTranscripts.listChunkRange(
+			requestId,
+			fromChunkSequence,
+			throughChunkSequence,
+			limit,
+		);
+	}
+
+	getWebSocketTranscriptSnapshotBounds(requestId: string): {
+		firstFrameSequence: number | null;
+		lastFrameSequence: number | null;
+		lastChunkSequence: number | null;
+	} {
+		return this.websocketTranscripts.getSnapshotBounds(requestId);
+	}
+
+	getWebSocketTranscriptBounds(requestId: string): {
+		firstFrameSequence: number | null;
+		lastFrameSequence: number | null;
+	} {
+		return this.websocketTranscripts.getBounds(requestId);
+	}
+
+	finalizeWebSocketRequest(
+		requestId: string,
+		options: {
+			success: boolean;
+			errorMessage: string | null;
+			responseTimeMs: number;
+			usage?: RequestData["usage"];
+			finalChunk?: WebSocketTranscriptChunk;
+		},
+	): RequestWithAccountName | null {
+		this.db.run("BEGIN");
+		try {
+			if (options.finalChunk) {
+				this.websocketTranscripts.appendChunk(options.finalChunk);
+			}
+			this.requests.finalizeWebSocket(
+				requestId,
+				options.success,
+				options.errorMessage,
+				options.responseTimeMs,
+				options.usage,
+			);
+			this.db.run("COMMIT");
+		} catch (error) {
+			this.db.run("ROLLBACK");
+			throw error;
+		}
+		return this.requests.findWithAccountName(requestId);
+	}
+
+	markInterruptedWebSocketRequests(now = Date.now()): number {
+		return this.requests.markInterruptedWebSockets(now);
+	}
+
 	listResponseChainPayloadsWithAccountNames(
 		requestId: string,
 	): Array<{ id: string; json: string; account_name: string | null }> {
@@ -420,8 +533,11 @@ export class DatabaseOperations implements StrategyStore, Disposable {
 		}
 		const removedPayloadsByAge =
 			this.requests.deletePayloadsOlderThan(payloadCutoff);
+		const removedTranscriptChunks =
+			this.websocketTranscripts.deleteClosedOlderThan(payloadCutoff);
 		const removedOrphans = this.requests.deleteOrphanedPayloads();
-		const removedPayloads = removedPayloadsByAge + removedOrphans;
+		const removedPayloads =
+			removedPayloadsByAge + removedTranscriptChunks + removedOrphans;
 		return { removedRequests, removedPayloads };
 	}
 

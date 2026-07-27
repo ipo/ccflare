@@ -1,4 +1,5 @@
-import { isAbsolute, resolve } from "node:path";
+import { existsSync } from "node:fs";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { TIME_CONSTANTS } from "@ccflare/core";
 import { isRecord } from "@ccflare/types";
@@ -77,20 +78,28 @@ function createDefaultLogger(): UsageWorkerLogger {
 	};
 }
 
-export function resolveUsageWorkerEntrypoint(): string {
+export function resolveUsageWorkerEntrypoint(
+	executablePath = process.execPath,
+	fileExists: (path: string) => boolean = existsSync,
+): string {
 	const configuredPath = process.env.CF_USAGE_WORKER_PATH?.trim();
-	if (!configuredPath) {
-		return new URL("./post-processor.worker.ts", import.meta.url).href;
+	if (configuredPath) {
+		if (configuredPath.startsWith("file://")) {
+			return configuredPath;
+		}
+
+		const absolutePath = isAbsolute(configuredPath)
+			? configuredPath
+			: resolve(process.cwd(), configuredPath);
+		return pathToFileURL(absolutePath).href;
 	}
 
-	if (configuredPath.startsWith("file://")) {
-		return configuredPath;
+	const bundledPath = join(dirname(executablePath), "post-processor.worker.js");
+	if (fileExists(bundledPath)) {
+		return pathToFileURL(bundledPath).href;
 	}
 
-	const absolutePath = isAbsolute(configuredPath)
-		? configuredPath
-		: resolve(process.cwd(), configuredPath);
-	return pathToFileURL(absolutePath).href;
+	return new URL("./post-processor.worker.ts", import.meta.url).href;
 }
 
 function createDefaultWorker(): WorkerLike {
