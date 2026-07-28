@@ -190,6 +190,47 @@ function extractUsageFromJson(
 	);
 }
 
+function extractUsageFromBufferedSse(
+	decodedBody: string,
+	state: RequestState,
+): void {
+	let dataLines: string[] = [];
+	const flushEvent = () => {
+		const data = dataLines.join("\n");
+		dataLines = [];
+		// Buffered fallback processing happens at request completion. Only parse
+		// authoritative usage events so token timing is not fabricated at the end.
+		if (data.includes('"usage"')) {
+			extractUsageFromData(data, state);
+		}
+	};
+
+	for (const rawLine of decodedBody.split(/\r?\n/)) {
+		if (rawLine.length === 0) {
+			flushEvent();
+			continue;
+		}
+		if (rawLine.startsWith("data:")) {
+			dataLines.push(rawLine.slice(5).trimStart());
+		}
+	}
+	flushEvent();
+}
+
+export function processBufferedResponseBody(
+	encodedBody: string,
+	state: RequestState,
+): void {
+	const decodedBody = Buffer.from(encodedBody, "base64").toString("utf-8");
+	try {
+		extractUsageFromJson(JSON.parse(decodedBody), state);
+	} catch {
+		// Codex can return SSE without a content-type header, causing the response
+		// to reach this nominally non-streaming path.
+		extractUsageFromBufferedSse(decodedBody, state);
+	}
+}
+
 function setUsageModel(state: RequestState, model: unknown): void {
 	const normalizedModel = normalizeTrackedModel(model);
 	if (normalizedModel) {
@@ -534,6 +575,62 @@ function hasTrackedUsageData(state: RequestState): boolean {
 	);
 }
 
+export async function finalizeUsageMetrics(state: RequestState): Promise<void> {
+	const { startMessage } = state;
+	const usageModel =
+		state.usage.model || (hasTrackedUsageData(state) ? "unknown" : undefined);
+	if (!usageModel) return;
+
+	if (!state.usage.model) {
+		log.debug(
+			`Usage model missing for request ${startMessage.requestId}, using fallback`,
+			{
+				provider: startMessage.providerName,
+				path: startMessage.path,
+			},
+		);
+	}
+	state.usage.model = usageModel;
+
+	const finalOutputTokens =
+		state.providerFinalOutputTokens ??
+		state.usage.outputTokens ??
+		state.usage.outputTokensComputed ??
+		0;
+	state.usage.outputTokens = finalOutputTokens;
+	state.usage.outputTokensComputed = undefined;
+	state.usage.totalTokens =
+		(state.usage.inputTokens || 0) +
+		finalOutputTokens +
+		(state.usage.cacheReadInputTokens || 0) +
+		(state.usage.cacheCreationInputTokens || 0);
+	state.usage.costUsd =
+		usageModel === "unknown"
+			? 0
+			: await estimateCostUSD(
+					usageModel,
+					{
+						inputTokens: state.usage.inputTokens,
+						outputTokens: finalOutputTokens,
+						cacheReadInputTokens: state.usage.cacheReadInputTokens,
+						cacheCreationInputTokens: state.usage.cacheCreationInputTokens,
+					},
+					{ provider: startMessage.providerName },
+				);
+
+	if (finalOutputTokens > 0) {
+		const durationMs = durationBetween(
+			state.firstTokenTimestamp,
+			state.lastTokenTimestamp,
+		);
+		if (durationMs !== null && durationMs > 0) {
+			state.usage.tokensPerSecond = finalOutputTokens / (durationMs / 1000);
+		} else if (durationMs !== null) {
+			state.usage.tokensPerSecond = finalOutputTokens / 0.001;
+		}
+	}
+}
+
 async function handleStart(msg: StartMessage): Promise<void> {
 	// Guard: cap concurrent tracked requests to prevent unbounded memory growth
 	if (requests.size >= MAX_TRACKED_REQUESTS) {
@@ -628,17 +725,12 @@ async function handleEnd(msg: EndMessage): Promise<void> {
 		return;
 	}
 
-	// For non-stream responses, extract usage data from response body
+	// For non-stream responses, extract usage data from JSON or from a
+	// headerless SSE body that was misclassified upstream.
 	if (msg.preExtractedUsage) {
 		applyUsageData(state, msg.preExtractedUsage, msg.preExtractedModel);
-	} else if (!state.usage.model && msg.responseBody) {
-		try {
-			const decoded = Buffer.from(msg.responseBody, "base64").toString("utf-8");
-			const json = JSON.parse(decoded);
-			extractUsageFromJson(json, state);
-		} catch {
-			// Ignore parse errors
-		}
+	} else if (msg.responseBody) {
+		processBufferedResponseBody(msg.responseBody, state);
 	}
 
 	if (msg.preExtractedModel && !state.usage.model) {
@@ -652,65 +744,7 @@ async function handleEnd(msg: EndMessage): Promise<void> {
 		);
 	}
 
-	// Calculate total tokens and cost
-	const usageModel =
-		state.usage.model || (hasTrackedUsageData(state) ? "unknown" : undefined);
-	if (usageModel) {
-		if (!state.usage.model) {
-			log.debug(
-				`Usage model missing for request ${msg.requestId}, using fallback`,
-				{
-					provider: startMessage.providerName,
-					path: startMessage.path,
-				},
-			);
-		}
-		state.usage.model = usageModel;
-
-		// Use provider's authoritative count if available, fallback to computed
-		const finalOutputTokens =
-			state.providerFinalOutputTokens ??
-			state.usage.outputTokens ??
-			state.usage.outputTokensComputed ??
-			0;
-
-		// Update usage with final values
-		state.usage.outputTokens = finalOutputTokens;
-		state.usage.outputTokensComputed = undefined; // Clear to avoid confusion
-
-		state.usage.totalTokens =
-			(state.usage.inputTokens || 0) +
-			finalOutputTokens +
-			(state.usage.cacheReadInputTokens || 0) +
-			(state.usage.cacheCreationInputTokens || 0);
-
-		state.usage.costUsd =
-			usageModel === "unknown"
-				? 0
-				: await estimateCostUSD(
-						usageModel,
-						{
-							inputTokens: state.usage.inputTokens,
-							outputTokens: finalOutputTokens,
-							cacheReadInputTokens: state.usage.cacheReadInputTokens,
-							cacheCreationInputTokens: state.usage.cacheCreationInputTokens,
-						},
-						{ provider: startMessage.providerName },
-					);
-
-		// Calculate tokens per second using actual streaming duration
-		if (finalOutputTokens > 0) {
-			const durationMs = durationBetween(
-				state.firstTokenTimestamp,
-				state.lastTokenTimestamp,
-			);
-			if (durationMs !== null && durationMs > 0) {
-				state.usage.tokensPerSecond = finalOutputTokens / (durationMs / 1000);
-			} else if (durationMs !== null) {
-				state.usage.tokensPerSecond = finalOutputTokens / 0.001;
-			}
-		}
-	}
+	await finalizeUsageMetrics(state);
 
 	let responseBody: string | null = null;
 

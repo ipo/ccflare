@@ -7,6 +7,7 @@ import {
 	type Account,
 	extractClientSessionIdFromHeaders,
 	type HttpMethod,
+	isRecord,
 } from "@ccflare/types";
 import { trackProxyBackgroundTask } from "./background-tasks";
 import type { ResolvedProxyContext } from "./handlers";
@@ -40,6 +41,36 @@ export interface ResponseHandlerOptions {
 	retryAttempt: number;
 	failoverAttempts: number;
 	preExtractedModel?: string;
+	upstreamRequestIsStreaming?: boolean;
+}
+
+function requestBodyEnablesStreaming(requestBody: ArrayBuffer | null): boolean {
+	if (!requestBody) return false;
+
+	try {
+		const parsed = JSON.parse(new TextDecoder().decode(requestBody));
+		return isRecord(parsed) && parsed.stream === true;
+	} catch {
+		return false;
+	}
+}
+
+function classifyStreamingResponse(
+	response: Response,
+	providerDetectedStream: boolean,
+	upstreamRequestIsStreaming: boolean | undefined,
+	requestBody: ArrayBuffer | null,
+): boolean {
+	if (providerDetectedStream) return true;
+	if (!response.body) return false;
+
+	// Codex can return SSE without a content-type header. In that case, use
+	// request intent, but never override an explicit non-SSE response type.
+	if (response.headers.get("content-type")?.trim()) return false;
+	if (upstreamRequestIsStreaming !== undefined) {
+		return upstreamRequestIsStreaming;
+	}
+	return requestBodyEnablesStreaming(requestBody);
 }
 
 /**
@@ -64,6 +95,7 @@ export async function forwardToClient(
 		retryAttempt, // Always 0 in new flow, but kept for message compatibility
 		failoverAttempts,
 		preExtractedModel,
+		upstreamRequestIsStreaming,
 	} = options;
 
 	// Always strip compression headers *before* we do anything else
@@ -75,7 +107,12 @@ export async function forwardToClient(
 
 	const responseHeadersObj = Object.fromEntries(response.headers.entries());
 
-	const isStream = ctx.provider.isStreamingResponse?.(response) ?? false;
+	const isStream = classifyStreamingResponse(
+		response,
+		ctx.provider.isStreamingResponse?.(response) ?? false,
+		upstreamRequestIsStreaming,
+		requestBody,
+	);
 
 	// Send START message immediately
 	const startMessage: StartMessage = {

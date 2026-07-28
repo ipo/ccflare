@@ -350,6 +350,7 @@ async function tryProviderFamily(
 					retryAttempt: 0,
 					failoverAttempts: attempt,
 					preExtractedModel: stripped.model,
+					upstreamRequestIsStreaming: isStreaming,
 				},
 				requestContext,
 			);

@@ -100,6 +100,62 @@ describe("forwardToClient", () => {
 		expect(endMessage?.preExtractedModel).toBe("claude-sonnet-4");
 	});
 
+	it("streams headerless SSE when the request enables streaming", async () => {
+		const messages: unknown[] = [];
+		const sseBody = [
+			"event: response.completed",
+			'data: {"type":"response.completed","response":{"model":"gpt-4o","usage":{"input_tokens":100,"output_tokens":20,"total_tokens":120}}}',
+			"",
+		].join("\n");
+		const response = await forwardToClient(
+			{
+				requestId: "req-headerless-sse",
+				method: "POST",
+				path: "/v1/codex/responses",
+				account: null,
+				requestHeaders: new Headers({ "content-type": "application/json" }),
+				requestBody: new TextEncoder().encode(
+					JSON.stringify({ model: "gpt-4o", stream: true }),
+				).buffer,
+				response: new Response(new TextEncoder().encode(sseBody), {
+					status: 200,
+				}),
+				timestamp: Date.now(),
+				retryAttempt: 0,
+				failoverAttempts: 0,
+			},
+			createResolvedProxyContext(messages),
+		);
+
+		expect(await response.text()).toBe(sseBody);
+		await waitForProxyBackgroundTasks();
+
+		expect(messages).toContainEqual(
+			expect.objectContaining({ type: "start", isStream: true }),
+		);
+		const chunks = messages.filter(
+			(message): message is { type: "chunk"; data: Uint8Array } =>
+				typeof message === "object" &&
+				message !== null &&
+				"type" in message &&
+				message.type === "chunk" &&
+				"data" in message &&
+				message.data instanceof Uint8Array,
+		);
+		expect(
+			chunks.map((message) => Buffer.from(message.data).toString()).join(""),
+		).toContain('"type":"response.completed"');
+		const endMessage = messages.find(
+			(message) =>
+				typeof message === "object" &&
+				message !== null &&
+				"type" in message &&
+				message.type === "end",
+		) as { responseBody?: string } | undefined;
+		expect(endMessage).toBeDefined();
+		expect(endMessage).not.toHaveProperty("responseBody");
+	});
+
 	it("includes the account name in the worker start message and start event", async () => {
 		const messages: unknown[] = [];
 		const events: unknown[] = [];

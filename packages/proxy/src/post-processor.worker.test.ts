@@ -1,9 +1,19 @@
-import { describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it } from "bun:test";
+import { resetPricingCatalogue } from "@ccflare/core";
 import {
 	createRequestState,
+	finalizeUsageMetrics,
+	processBufferedResponseBody,
 	processStreamChunk,
 } from "./post-processor.worker";
 import type { StartMessage } from "./worker-messages";
+
+const originalFetch = globalThis.fetch;
+
+afterEach(() => {
+	globalThis.fetch = originalFetch;
+	resetPricingCatalogue();
+});
 
 function createStartMessage(): StartMessage {
 	return {
@@ -156,5 +166,57 @@ describe("processStreamChunk", () => {
 		});
 		expect(state.firstTokenTimestamp).toBeNumber();
 		expect(state.lastTokenTimestamp).toBeNumber();
+	});
+
+	it("estimates cost from a buffered headerless Codex SSE response", async () => {
+		resetPricingCatalogue();
+		globalThis.fetch = Object.assign(
+			async () =>
+				new Response(
+					JSON.stringify({
+						openai: {
+							models: {
+								"gpt-5.6-sol": {
+									id: "gpt-5.6-sol",
+									name: "GPT-5.6 Sol",
+									cost: { input: 2, output: 8, cache_read: 0.2 },
+								},
+							},
+						},
+					}),
+					{ status: 200, headers: { "content-type": "application/json" } },
+				),
+			{ preconnect: originalFetch.preconnect },
+		) as typeof fetch;
+		const state = createRequestState({
+			...createStartMessage(),
+			providerName: "codex",
+			responseHeaders: {},
+			isStream: false,
+		});
+		const responseBody = Buffer.from(
+			[
+				"event: response.completed",
+				'data: {"type":"response.completed","response":{"model":"gpt-5.6-sol","usage":{"input_tokens":1000,"output_tokens":100,"total_tokens":1100,"input_tokens_details":{"cached_tokens":800}}}}',
+				"",
+			].join("\n"),
+		).toString("base64");
+
+		processBufferedResponseBody(responseBody, state);
+		await finalizeUsageMetrics(state);
+
+		expect(state.usage).toMatchObject({
+			model: "gpt-5.6-sol",
+			inputTokens: 200,
+			cacheReadInputTokens: 800,
+			outputTokens: 100,
+			totalTokens: 1100,
+		});
+		expect(state.usage.costUsd).toBeCloseTo(
+			(200 * 2 + 800 * 0.2 + 100 * 8) / 1_000_000,
+			10,
+		);
+		expect(state.firstTokenTimestamp).toBeUndefined();
+		expect(state.lastTokenTimestamp).toBeUndefined();
 	});
 });
