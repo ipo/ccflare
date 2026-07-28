@@ -171,7 +171,7 @@ export class APIRouter {
 		this.addDynamicRoute(
 			"GET",
 			"/api/requests/:requestId/conversation",
-			(_req, _url, params) => requestsConversationHandler(params.requestId),
+			(req, _url, params) => requestsConversationHandler(params.requestId, req),
 		);
 		this.addDynamicRoute(
 			"GET",

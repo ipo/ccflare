@@ -18,6 +18,7 @@ import type {
 
 const log = new Logger("WebSocketTranscriptHandler");
 const EXPORT_PAGE_CHUNKS = 8;
+const LIVE_REPLAY_PAGE_CHUNKS = 8;
 
 function findWebSocketRequest(dbOps: DatabaseOperations, requestId: string) {
 	const request = dbOps.getRequestWithAccountName(requestId);
@@ -50,19 +51,37 @@ export function createWebSocketTranscriptExportResponse(
 	dbOps: DatabaseOperations,
 	requestId: string,
 	active: boolean,
+	abortSignal?: AbortSignal,
 ): Response {
 	const bounds = dbOps.getWebSocketTranscriptSnapshotBounds(requestId);
 	const encoder = new TextEncoder();
 	const lastChunkSequence = bounds.lastChunkSequence ?? -1;
 	let nextChunkSequence = 0;
-	let cancelled = false;
-	let finished = lastChunkSequence < 0;
+	let exhausted = lastChunkSequence < 0;
+	let terminated = false;
+
+	const terminate = () => {
+		if (terminated) return;
+		terminated = true;
+		abortSignal?.removeEventListener("abort", terminate);
+	};
+	if (abortSignal?.aborted) terminate();
+	else abortSignal?.addEventListener("abort", terminate, { once: true });
 
 	const stream = new ReadableStream<Uint8Array>({
 		pull(controller) {
-			if (cancelled) return;
+			if (terminated) {
+				try {
+					controller.close();
+				} catch {
+					// Bun may already have detached an aborted response stream.
+				}
+				return;
+			}
+
+			let encoded: Uint8Array | null = null;
 			try {
-				while (!finished) {
+				while (!exhausted && encoded === null) {
 					const chunks = dbOps.listWebSocketTranscriptChunkRange(
 						requestId,
 						nextChunkSequence,
@@ -70,9 +89,8 @@ export function createWebSocketTranscriptExportResponse(
 						EXPORT_PAGE_CHUNKS,
 					);
 					if (chunks.length === 0) {
-						finished = true;
-						controller.close();
-						return;
+						exhausted = true;
+						break;
 					}
 
 					nextChunkSequence = chunks[chunks.length - 1].chunkSequence + 1;
@@ -83,30 +101,51 @@ export function createWebSocketTranscriptExportResponse(
 								entry.sequence <= bounds.lastFrameSequence,
 						),
 					);
-					if (nextChunkSequence > lastChunkSequence) {
-						finished = true;
-					}
+					exhausted = nextChunkSequence > lastChunkSequence;
 					if (entries.length > 0) {
-						controller.enqueue(
-							encoder.encode(
-								`${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
-							),
+						encoded = encoder.encode(
+							`${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
 						);
-						if (finished) controller.close();
-						return;
 					}
 				}
-				controller.close();
 			} catch (error) {
 				log.error("Failed to stream WebSocket conversation", {
 					requestId,
 					error: error instanceof Error ? error.message : String(error),
 				});
-				controller.error(error);
+				terminate();
+				try {
+					controller.error(error);
+				} catch {
+					// Bun may already have detached the response stream after an abort.
+				}
+				return;
+			}
+
+			if (terminated) return;
+			if (encoded) {
+				try {
+					controller.enqueue(encoded);
+				} catch (error) {
+					terminate();
+					log.debug("Stopped WebSocket conversation export after disconnect", {
+						requestId,
+						error: error instanceof Error ? error.message : String(error),
+					});
+					return;
+				}
+			}
+			if (exhausted) {
+				terminate();
+				try {
+					controller.close();
+				} catch {
+					// The consumer may have cancelled between the final enqueue and close.
+				}
 			}
 		},
 		cancel() {
-			cancelled = true;
+			terminate();
 		},
 	});
 
@@ -172,37 +211,78 @@ export function createWebSocketTranscriptStreamHandler(
 			parseCursor(request.headers.get("last-event-id")),
 		);
 		let unsubscribe: (() => void) | null = null;
-		let cancelled = false;
-		let replayTimer: ReturnType<typeof setTimeout> | null = null;
+		let terminal = false;
+		let pullReplay: (() => void) | null = null;
+		const buffered: WebSocketTranscriptLiveEvent[] = [];
+		const onAbort = () => cleanup();
+		const cleanup = (): boolean => {
+			if (terminal) return false;
+			terminal = true;
+			pullReplay = null;
+			unsubscribe?.();
+			unsubscribe = null;
+			buffered.length = 0;
+			request.signal.removeEventListener("abort", onAbort);
+			return true;
+		};
+		if (request.signal.aborted) cleanup();
+		else request.signal.addEventListener("abort", onAbort, { once: true });
+
 		const stream = new ReadableStream<Uint8Array>({
 			start(controller) {
+				if (terminal) {
+					try {
+						controller.close();
+					} catch {
+						// Bun may already have detached an aborted response stream.
+					}
+					return;
+				}
 				const encoder = new TextEncoder();
 				let lastSent = initialCursor;
 				let replaying = true;
-				const buffered: WebSocketTranscriptLiveEvent[] = [];
 
-				const send = (rawChunk: WebSocketTranscriptChunk) => {
+				const send = (rawChunk: WebSocketTranscriptChunk): boolean => {
+					if (terminal) return false;
 					const chunk = trimChunkAfter(rawChunk, lastSent);
-					if (!chunk) return;
-					lastSent = chunk.lastFrameSequence;
-					controller.enqueue(
-						encoder.encode(
-							`id: ${lastSent}\ndata: ${JSON.stringify({ type: "chunk", chunk })}\n\n`,
-						),
-					);
+					if (!chunk) return true;
+					try {
+						controller.enqueue(
+							encoder.encode(
+								`id: ${chunk.lastFrameSequence}\ndata: ${JSON.stringify({ type: "chunk", chunk })}\n\n`,
+							),
+						);
+						lastSent = chunk.lastFrameSequence;
+						return true;
+					} catch (error) {
+						cleanup();
+						log.debug("Stopped WebSocket transcript stream after disconnect", {
+							requestId,
+							error: error instanceof Error ? error.message : String(error),
+						});
+						return false;
+					}
 				};
 
 				const complete = () => {
-					if (cancelled) return;
-					cancelled = true;
-					controller.enqueue(
-						encoder.encode(`event: complete\ndata: {"type":"complete"}\n\n`),
-					);
-					unsubscribe?.();
-					unsubscribe = null;
-					controller.close();
+					if (!cleanup()) return;
+					try {
+						controller.enqueue(
+							encoder.encode(`event: complete\ndata: {"type":"complete"}\n\n`),
+						);
+						controller.close();
+					} catch (error) {
+						log.debug(
+							"WebSocket transcript stream detached during completion",
+							{
+								requestId,
+								error: error instanceof Error ? error.message : String(error),
+							},
+						);
+					}
 				};
 				const dispatchLive = (event: WebSocketTranscriptLiveEvent) => {
+					if (terminal) return;
 					if (event.type === "chunk") send(event.chunk);
 					else complete();
 				};
@@ -210,14 +290,17 @@ export function createWebSocketTranscriptStreamHandler(
 				unsubscribe = websocketTranscriptEvents.subscribe(
 					requestId,
 					(event) => {
+						if (terminal) return;
 						if (replaying) buffered.push(event);
 						else dispatchLive(event);
 					},
 				);
 
 				const finishReplay = () => {
+					if (terminal) return;
+					pullReplay = null;
 					replaying = false;
-					buffered
+					const replayed = buffered
 						.filter(
 							(
 								event,
@@ -230,40 +313,55 @@ export function createWebSocketTranscriptStreamHandler(
 							(left, right) =>
 								left.chunk.chunkSequence - right.chunk.chunkSequence,
 						)
-						.forEach((event) => {
-							send(event.chunk);
-						});
+						.every((event) => send(event.chunk));
+					if (!replayed || terminal) return;
 					if (
 						buffered.some((event) => event.type === "complete") ||
 						findWebSocketRequest(dbOps, requestId)?.success !== null
 					) {
 						complete();
+						return;
 					}
 					buffered.length = 0;
 				};
-				const replayPage = (cursor: number) => {
-					if (cancelled) return;
-					const chunks = dbOps.listWebSocketTranscriptChunks(
-						requestId,
-						cursor,
-						100,
-					);
-					for (const chunk of chunks) send(chunk);
-					const next = chunks.at(-1)?.lastFrameSequence ?? cursor;
-					if (chunks.length < 100 || next <= cursor) {
-						finishReplay();
-						return;
+				let replayCursor = initialCursor;
+				const replayPage = () => {
+					if (terminal) return;
+					try {
+						const cursor = replayCursor;
+						const chunks = dbOps.listWebSocketTranscriptChunks(
+							requestId,
+							cursor,
+							LIVE_REPLAY_PAGE_CHUNKS,
+						);
+						if (!chunks.every((chunk) => send(chunk)) || terminal) return;
+						const next = chunks.at(-1)?.lastFrameSequence ?? cursor;
+						if (chunks.length < LIVE_REPLAY_PAGE_CHUNKS || next <= cursor) {
+							finishReplay();
+							return;
+						}
+						replayCursor = next;
+					} catch (error) {
+						log.error("Failed to replay WebSocket transcript", {
+							requestId,
+							error: error instanceof Error ? error.message : String(error),
+						});
+						if (cleanup()) {
+							try {
+								controller.close();
+							} catch {
+								// Bun may already have detached the response stream.
+							}
+						}
 					}
-					replayTimer = setTimeout(() => replayPage(next), 0);
-					replayTimer.unref?.();
 				};
-				replayPage(initialCursor);
+				pullReplay = replayPage;
+			},
+			pull() {
+				pullReplay?.();
 			},
 			cancel() {
-				cancelled = true;
-				if (replayTimer) clearTimeout(replayTimer);
-				unsubscribe?.();
-				unsubscribe = null;
+				cleanup();
 			},
 		});
 		return sseResponse(stream);

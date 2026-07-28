@@ -138,7 +138,7 @@ export function createRequestsDetailHandler(dbOps: DatabaseOperations) {
 }
 
 export function createRequestsConversationHandler(dbOps: DatabaseOperations) {
-	return (requestId: string): Response => {
+	return (requestId: string, incomingRequest?: Request): Response => {
 		try {
 			const request = dbOps.getRequestWithAccountName(requestId);
 			if (!request) {
@@ -149,6 +149,7 @@ export function createRequestsConversationHandler(dbOps: DatabaseOperations) {
 					dbOps,
 					requestId,
 					request.success === null,
+					incomingRequest?.signal,
 				);
 			}
 

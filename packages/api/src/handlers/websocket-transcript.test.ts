@@ -31,7 +31,10 @@ describe("WebSocket transcript handlers", () => {
 		);
 	});
 
-	afterEach(() => dbOps.close());
+	afterEach(() => {
+		websocketTranscriptEvents.removeAllListeners("ws-handler");
+		dbOps.close();
+	});
 
 	it("keeps metadata-only websocket requests visible in request detail", async () => {
 		const response = createRequestsDetailHandler(dbOps)(10);
@@ -195,6 +198,28 @@ describe("WebSocket transcript handlers", () => {
 		);
 	});
 
+	it("stops exporting transcript pages when the request aborts", async () => {
+		dbOps.appendWebSocketTranscriptChunks(
+			Array.from({ length: 12 }, (_, index) =>
+				createChunk(index + 1, index + 1, index),
+			),
+		);
+		const abortController = new AbortController();
+		const response = createRequestsConversationHandler(dbOps)(
+			"ws-handler",
+			new Request("http://localhost/conversation", {
+				signal: abortController.signal,
+			}),
+		);
+		const reader = response.body?.getReader();
+		if (!reader) throw new Error("Expected conversation response body");
+
+		const firstPage = await reader.read();
+		expect(firstPage.done).toBe(false);
+		abortController.abort();
+		expect((await reader.read()).done).toBe(true);
+	});
+
 	it("streams an uncapped multi-megabyte websocket conversation", async () => {
 		const payload = "x".repeat(128 * 1024);
 		const chunks = Array.from({ length: 24 }, (_, index) => {
@@ -232,6 +257,78 @@ describe("WebSocket transcript handlers", () => {
 		expect(reads).toBeGreaterThan(1);
 		expect(entries).toHaveLength(24);
 		expect(entries.every((entry) => entry.data === payload)).toBe(true);
+	});
+
+	it("unsubscribes before events can reach an aborted response", async () => {
+		dbOps.appendWebSocketTranscriptChunks([createChunk(1, 1, 0)]);
+		const abortController = new AbortController();
+		const baseline = websocketTranscriptEvents.listenerCount("ws-handler");
+		const response = createWebSocketTranscriptStreamHandler(dbOps)(
+			"ws-handler",
+			new Request("http://localhost/stream", {
+				signal: abortController.signal,
+			}),
+			new URL("http://localhost/stream"),
+		);
+		expect(websocketTranscriptEvents.listenerCount("ws-handler")).toBe(
+			baseline + 1,
+		);
+
+		abortController.abort();
+		expect(websocketTranscriptEvents.listenerCount("ws-handler")).toBe(
+			baseline,
+		);
+		expect(() => {
+			websocketTranscriptEvents.publish(createChunk(2, 2, 1));
+			websocketTranscriptEvents.complete("ws-handler");
+		}).not.toThrow();
+		await response.body?.cancel();
+	});
+
+	it("unsubscribes before events can reach a cancelled response body", async () => {
+		dbOps.appendWebSocketTranscriptChunks([createChunk(1, 1, 0)]);
+		const baseline = websocketTranscriptEvents.listenerCount("ws-handler");
+		const response = createWebSocketTranscriptStreamHandler(dbOps)(
+			"ws-handler",
+			new Request("http://localhost/stream"),
+			new URL("http://localhost/stream"),
+		);
+		expect(websocketTranscriptEvents.listenerCount("ws-handler")).toBe(
+			baseline + 1,
+		);
+
+		await response.body?.cancel();
+		expect(websocketTranscriptEvents.listenerCount("ws-handler")).toBe(
+			baseline,
+		);
+		expect(() => {
+			websocketTranscriptEvents.publish(createChunk(2, 2, 1));
+			websocketTranscriptEvents.complete("ws-handler");
+		}).not.toThrow();
+	});
+
+	it("stops paginated replay work when the request aborts", async () => {
+		dbOps.appendWebSocketTranscriptChunks(
+			Array.from({ length: 9 }, (_, index) =>
+				createChunk(index + 1, index + 1, index),
+			),
+		);
+		const abortController = new AbortController();
+		const baseline = websocketTranscriptEvents.listenerCount("ws-handler");
+		const response = createWebSocketTranscriptStreamHandler(dbOps)(
+			"ws-handler",
+			new Request("http://localhost/stream", {
+				signal: abortController.signal,
+			}),
+			new URL("http://localhost/stream"),
+		);
+
+		abortController.abort();
+		await Bun.sleep(5);
+		expect(websocketTranscriptEvents.listenerCount("ws-handler")).toBe(
+			baseline,
+		);
+		await response.body?.cancel();
 	});
 
 	it("replays persisted chunks, streams new chunks, and completes", async () => {
