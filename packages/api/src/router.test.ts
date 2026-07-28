@@ -1409,7 +1409,7 @@ describe("APIRouter", () => {
 		]);
 	});
 
-	it("returns the conversation ancestor chain for a request", async () => {
+	it("returns conversation chains by request or client session id", async () => {
 		const { router, dbOps } = createRouterContext();
 
 		dbOps.saveRequest(
@@ -1430,7 +1430,7 @@ describe("APIRouter", () => {
 				payload: {
 					id: "request-root",
 					request: {
-						headers: {},
+						headers: { "x-ccflare-session-id": "session-conversation" },
 						body: encode(
 							JSON.stringify({
 								type: "response.create",
@@ -1475,7 +1475,7 @@ describe("APIRouter", () => {
 				payload: {
 					id: "request-child",
 					request: {
-						headers: {},
+						headers: { "x-ccflare-session-id": "session-conversation" },
 						body: encode(
 							JSON.stringify({
 								type: "response.create",
@@ -1521,7 +1521,7 @@ describe("APIRouter", () => {
 				payload: {
 					id: "request-grandchild",
 					request: {
-						headers: {},
+						headers: { "x-ccflare-session-id": "session-conversation" },
 						body: encode(
 							JSON.stringify({
 								type: "response.create",
@@ -1559,6 +1559,18 @@ describe("APIRouter", () => {
 		expect(
 			((await response.json()) as Array<{ id: string }>).map((row) => row.id),
 		).toEqual(["request-root", "request-child"]);
+
+		const sessionResponse = await apiRequest(
+			router,
+			"GET",
+			"/api/requests/session-conversation/conversation",
+		);
+		expect(sessionResponse.status).toBe(200);
+		expect(
+			((await sessionResponse.json()) as Array<{ id: string }>).map(
+				(row) => row.id,
+			),
+		).toEqual(["request-root", "request-child", "request-grandchild"]);
 	});
 
 	it("excludes sibling branches from the request conversation endpoint", async () => {

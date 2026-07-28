@@ -702,9 +702,11 @@ Get detailed request information including payloads. Request and response bodies
 curl "http://localhost:8080/api/requests/detail?limit=10"
 ```
 
-#### GET /api/requests/:requestId/conversation
+#### GET /api/requests/:identifier/conversation
 
-Return the stored conversation for one request. The response depends on the request transport:
+Return a stored conversation by exact request ID or by client session ID. Exact request IDs take precedence; otherwise ccflare resolves `identifier` to the most recent request whose `client_session_id` matches, including values supplied through `x-ccflare-session-id`.
+
+The response depends on the resolved request transport:
 
 - HTTP requests return the existing `application/json` array of request payloads in response-chain ancestor order.
 - WebSocket requests return a finite `application/x-ndjson` snapshot containing one raw `WebSocketTranscriptEntry` per line, ordered by persisted chunk and frame sequence.

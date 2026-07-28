@@ -319,6 +319,14 @@ export class DatabaseOperations implements StrategyStore, Disposable {
 		return this.requests.findWithAccountName(requestId);
 	}
 
+	getLatestRequestWithAccountNameByClientSessionId(
+		clientSessionId: string,
+	): RequestWithAccountName | null {
+		return this.requests.findLatestWithAccountNameByClientSessionId(
+			clientSessionId,
+		);
+	}
+
 	updateWebSocketRequestAccount(
 		requestId: string,
 		accountId: string | null,

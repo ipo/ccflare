@@ -138,12 +138,17 @@ export function createRequestsDetailHandler(dbOps: DatabaseOperations) {
 }
 
 export function createRequestsConversationHandler(dbOps: DatabaseOperations) {
-	return (requestId: string, incomingRequest?: Request): Response => {
+	return (requestIdentifier: string, incomingRequest?: Request): Response => {
 		try {
-			const request = dbOps.getRequestWithAccountName(requestId);
+			const request =
+				dbOps.getRequestWithAccountName(requestIdentifier) ??
+				dbOps.getLatestRequestWithAccountNameByClientSessionId(
+					requestIdentifier,
+				);
 			if (!request) {
 				return errorResponse(NotFound("Request conversation not found"));
 			}
+			const requestId = request.id;
 			if (request.method === "WS") {
 				return createWebSocketTranscriptExportResponse(
 					dbOps,

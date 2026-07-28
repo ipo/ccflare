@@ -345,6 +345,26 @@ export class RequestRepository extends BaseRepository<RequestData> {
 		return toRequestWithAccountName(row);
 	}
 
+	findLatestWithAccountNameByClientSessionId(
+		clientSessionId: string,
+	): RequestWithAccountName | null {
+		const row = this.get<RequestRow & { account_name: string | null }>(
+			`
+				SELECT r.*, a.name AS account_name
+				FROM requests r
+				LEFT JOIN accounts a ON r.account_used = a.id
+				WHERE r.client_session_id = ?
+				ORDER BY r.timestamp DESC, r.id DESC
+				LIMIT 1
+			`,
+			[clientSessionId],
+		);
+		if (!row || !isHttpMethod(row.method) || !isAccountProvider(row.provider)) {
+			return null;
+		}
+		return toRequestWithAccountName(row);
+	}
+
 	updateAccount(requestId: string, accountId: string | null): void {
 		this.run(`UPDATE requests SET account_used = ? WHERE id = ?`, [
 			accountId,
