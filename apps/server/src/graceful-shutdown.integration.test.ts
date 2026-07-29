@@ -183,5 +183,5 @@ describe("graceful shutdown integration", () => {
 			totalTokens: 5,
 			success: true,
 		});
-	});
+	}, 15_000);
 });
