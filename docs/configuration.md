@@ -193,6 +193,32 @@ Response:
 
 ## Example Configurations
 
+### Codex Unified Model Catalog
+
+Codex can list the supported OpenAI, Anthropic, and Kimi models from one
+Claudeflare provider. Add this to Codex's `config.toml`, replacing the overlay
+path with the absolute path to this checkout:
+
+```toml
+model_provider = "claudeflare"
+model = "gpt-5.6-sol"
+model_catalog_overlay_json = "/absolute/path/to/claudeflare/integrations/codex/models.json"
+
+[model_providers.claudeflare]
+name = "Claudeflare"
+base_url = "http://127.0.0.1:8080/v1/ccflare/openai"
+wire_api = "responses"
+supports_websockets = false
+```
+
+The catalog is loaded at Codex startup, so restart Codex after changing
+`integrations/codex/models.json`. Version 1 supports only the canonical catalog
+IDs shown in the picker, such as `anthropic/claude-sonnet-5` and `kimi/k3`; pi
+short aliases such as `opus-5`, `5.6-sol`, and `kimi-2.7` are not supported.
+
+The provider always uses the Responses API. Claudeflare selects and translates
+the upstream OpenAI, Anthropic, or Kimi family from the canonical model ID.
+
 ### High Throughput Setup
 
 Optimized for maximum request throughput with minimal overhead:

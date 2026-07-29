@@ -136,6 +136,14 @@ export OPENAI_BASE_URL=http://localhost:8080/v1/openai
 
 You can configure both providers at the same time and ccflare will keep account selection isolated per provider.
 
+### Codex unified model picker
+
+Codex can use one Claudeflare provider for OpenAI, Anthropic, and Kimi selections
+through the Responses compatibility route. Configure the static catalog overlay as
+shown in the [Codex configuration example](docs/configuration.md#codex-unified-model-catalog).
+Use the canonical catalog IDs (for example, `anthropic/claude-sonnet-5` and
+`kimi/k3`), not pi short aliases.
+
 ## Example usage
 
 ### Anthropic example

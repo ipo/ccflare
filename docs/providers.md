@@ -281,6 +281,14 @@ A model id absent from the catalogue logs one warning and records a cost of 0.
 
 ## Built-In Provider Notes
 
+### Codex unified catalog
+
+`integrations/codex/models.json` is a static Codex catalog overlay for the
+single `http://127.0.0.1:8080/v1/ccflare/openai` Responses provider. It exposes
+canonical OpenAI IDs without an `openai/` picker duplicate and uses
+`anthropic/` and `kimi/` IDs to select those compatibility families. Restart
+Codex after changing the overlay; pi short aliases are intentionally unsupported.
+
 ### Anthropic
 
 - upstream base URL defaults to `https://api.anthropic.com`
