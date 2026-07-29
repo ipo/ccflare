@@ -163,12 +163,14 @@ describe("transformAnthropicResponseToOpenAIResponses", () => {
 				type: "function_call",
 				call_id: "call_1",
 				name: "read",
+				arguments: '{"path":"a"}',
 			}),
 			expect.objectContaining({
 				type: "function_call",
 				call_id: "call_2",
 				name: "spawn",
 				namespace: "agents.",
+				arguments: '{"task":"test"}',
 			}),
 			expect.objectContaining({
 				type: "custom_tool_call",
@@ -176,6 +178,61 @@ describe("transformAnthropicResponseToOpenAIResponses", () => {
 				name: "apply_patch",
 				input: "patch",
 			}),
+		]);
+	});
+
+	it("preserves zero-argument inputs through empty Anthropic JSON deltas", async () => {
+		const response = await transformAnthropicResponseToOpenAIResponses(
+			new Response(
+				[
+					"event: message_start",
+					'data: {"type":"message_start","message":{"id":"msg_initial_input","model":"claude-opus-5","usage":{"input_tokens":1,"output_tokens":0}}}',
+					"",
+					"event: content_block_start",
+					'data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"call_empty","name":"noop","input":{}}}',
+					"",
+					"event: content_block_delta",
+					'data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":""}}',
+					"",
+					"event: content_block_start",
+					'data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"call_nonempty","name":"read","input":{"path":"a"}}}',
+					"",
+					"event: content_block_start",
+					'data: {"type":"content_block_start","index":2,"content_block":{"type":"tool_use","id":"call_missing","name":"status"}}',
+					"",
+					"event: content_block_stop",
+					'data: {"type":"content_block_stop","index":0}',
+					"",
+					"event: content_block_stop",
+					'data: {"type":"content_block_stop","index":1}',
+					"",
+					"event: content_block_stop",
+					'data: {"type":"content_block_stop","index":2}',
+					"",
+					"event: message_stop",
+					'data: {"type":"message_stop"}',
+					"",
+					"",
+				].join("\n"),
+				{ headers: { "content-type": "text/event-stream" } },
+			),
+		);
+
+		const events = parseResponseEvents(await response.text());
+		const doneArguments = events
+			.filter((event) => event.type === "response.function_call_arguments.done")
+			.map((event) => event.arguments);
+		expect(doneArguments).toEqual(["{}", '{"path":"a"}', "{}"]);
+
+		const completed = events.find(
+			(event) => event.type === "response.completed",
+		) as {
+			response: { output: Array<{ arguments?: string }> };
+		};
+		expect(completed.response.output.map((item) => item.arguments)).toEqual([
+			"{}",
+			'{"path":"a"}',
+			"{}",
 		]);
 	});
 

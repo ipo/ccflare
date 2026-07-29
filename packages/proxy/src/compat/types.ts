@@ -75,6 +75,7 @@ export type AnthropicToResponsesStreamState = {
 	functionNamespaces: Map<number, string>;
 	functionTypes: Map<number, "function_call" | "custom_tool_call">;
 	functionArguments: Map<number, string>;
+	functionArgumentDeltas: Set<number>;
 	reasoningIds: Map<number, string>;
 	reasoningTexts: Map<number, string>;
 };

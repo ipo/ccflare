@@ -83,6 +83,7 @@ async function transformAnthropicResponse(
 			functionNamespaces: new Map(),
 			functionTypes: new Map(),
 			functionArguments: new Map(),
+			functionArgumentDeltas: new Set(),
 			reasoningIds: new Map(),
 			reasoningTexts: new Map(),
 		};
@@ -499,7 +500,14 @@ function transformAnthropicFrameToOpenAIResponses(
 				outputIndex,
 				identity.kind === "custom" ? "custom_tool_call" : "function_call",
 			);
-			state.functionArguments.set(outputIndex, "");
+			state.functionArguments.set(
+				outputIndex,
+				identity.kind !== "custom" && "input" in payload.content_block
+					? (JSON.stringify(payload.content_block.input) ?? "")
+					: identity.kind === "custom"
+						? ""
+						: "{}",
+			);
 			const itemType =
 				identity.kind === "custom" ? "custom_tool_call" : "function_call";
 			outputs.push(
@@ -567,11 +575,14 @@ function transformAnthropicFrameToOpenAIResponses(
 		) {
 			const callId =
 				state.functionCallIds.get(outputIndex) ?? generateId("call");
-			state.functionArguments.set(
-				outputIndex,
-				(state.functionArguments.get(outputIndex) ?? "") +
-					payload.delta.partial_json,
-			);
+			if (payload.delta.partial_json) {
+				const argumentsText = state.functionArgumentDeltas.has(outputIndex)
+					? (state.functionArguments.get(outputIndex) ?? "") +
+						payload.delta.partial_json
+					: payload.delta.partial_json;
+				state.functionArgumentDeltas.add(outputIndex);
+				state.functionArguments.set(outputIndex, argumentsText);
+			}
 			if (state.functionTypes.get(outputIndex) !== "custom_tool_call") {
 				outputs.push(
 					buildSseFrame("response.function_call_arguments.delta", {
