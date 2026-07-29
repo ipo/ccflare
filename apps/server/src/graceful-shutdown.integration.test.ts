@@ -11,13 +11,12 @@ describe("graceful shutdown integration", () => {
 			import { join } from "node:path";
 			import startServer from "./apps/server/src/server.ts";
 
-			const SERVER_URL = "http://localhost:8080";
 			const originalFetch = globalThis.fetch;
 			const tempDir = mkdtempSync(join(tmpdir(), "ccflare-shutdown-"));
 			process.env.ccflare_DB_PATH = join(tempDir, "ccflare.db");
 			process.env.ccflare_CONFIG_PATH = join(tempDir, "ccflare.json");
 
-			async function waitFor(run, isReady, timeoutMs = 4000) {
+			async function waitFor(run, isReady, description, timeoutMs = 4000) {
 				const deadline = Date.now() + timeoutMs;
 				while (Date.now() < deadline) {
 					const value = await run();
@@ -26,7 +25,7 @@ describe("graceful shutdown integration", () => {
 					}
 					await Bun.sleep(25);
 				}
-				throw new Error("Timed out waiting for condition");
+				throw new Error(\`Timed out waiting for \${description}\`);
 			}
 
 			try {
@@ -66,14 +65,19 @@ describe("graceful shutdown integration", () => {
 					{ preconnect: originalFetch.preconnect },
 				);
 
-				let server = startServer({ port: 8080, withDashboard: false });
+				let server = startServer({ port: 0, withDashboard: false });
+				const serverUrl = () => \`http://localhost:\${server.port}\`;
 
 				await waitFor(
-					async () => (await originalFetch(\`\${SERVER_URL}/health\`)).status,
-					(status) => status === 200,
+					async () => {
+						const response = await originalFetch(\`\${serverUrl()}/health\`);
+						return response.ok ? response.json() : null;
+					},
+					(health) => health?.runtime?.usageWorker?.state === "ready",
+					"initial server health and usage worker readiness",
 				);
 
-				const createAccountResponse = await originalFetch(\`\${SERVER_URL}/api/accounts\`, {
+				const createAccountResponse = await originalFetch(\`\${serverUrl()}/api/accounts\`, {
 					method: "POST",
 					headers: {
 						"content-type": "application/json",
@@ -89,7 +93,7 @@ describe("graceful shutdown integration", () => {
 					throw new Error(\`Account creation failed: \${createAccountResponse.status}\`);
 				}
 
-				const proxyResponse = await originalFetch(\`\${SERVER_URL}/v1/openai/responses\`, {
+				const proxyResponse = await originalFetch(\`\${serverUrl()}/v1/openai/responses\`, {
 					method: "POST",
 					headers: {
 						"content-type": "application/json",
@@ -106,15 +110,16 @@ describe("graceful shutdown integration", () => {
 				// Give background tasks a moment to post worker messages
 				await Bun.sleep(200);
 				await server.stop();
-				server = startServer({ port: 8080, withDashboard: false });
+				server = startServer({ port: 0, withDashboard: false });
 				await waitFor(
-					async () => (await originalFetch(\`\${SERVER_URL}/health\`)).status,
+					async () => (await originalFetch(\`\${serverUrl()}/health\`)).status,
 					(status) => status === 200,
+					"restarted server health",
 				);
 
 				const requests = await waitFor(
 					async () => {
-						const response = await originalFetch(\`\${SERVER_URL}/api/requests?limit=5\`);
+						const response = await originalFetch(\`\${serverUrl()}/api/requests?limit=5\`);
 						if (!response.ok) {
 							throw new Error(\`Requests fetch failed: \${response.status}\`);
 						}
@@ -129,6 +134,7 @@ describe("graceful shutdown integration", () => {
 								entry.totalTokens === 5 &&
 								entry.success === true,
 						),
+					"flushed request persistence",
 				);
 
 				await server.stop();
@@ -148,12 +154,13 @@ describe("graceful shutdown integration", () => {
 			env: process.env,
 		});
 
-		const [exitCode, stdout] = await Promise.all([
+		const [exitCode, stdout, stderr] = await Promise.all([
 			subprocess.exited,
 			new Response(subprocess.stdout).text(),
+			new Response(subprocess.stderr).text(),
 		]);
 
-		expect(exitCode).toBe(0);
+		expect(exitCode, `Graceful shutdown child stderr:\n${stderr}`).toBe(0);
 
 		const resultLine = stdout
 			.trim()
@@ -183,5 +190,5 @@ describe("graceful shutdown integration", () => {
 			totalTokens: 5,
 			success: true,
 		});
-	});
+	}, 15_000);
 });
