@@ -834,6 +834,7 @@ describe("Anthropic passthrough integration", () => {
 			"openai",
 			"claude-code",
 			"codex",
+			"kimi",
 		]);
 
 		const createAccountResponse = await runCurl([
