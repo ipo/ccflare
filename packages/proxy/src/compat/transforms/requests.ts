@@ -3,6 +3,7 @@ export {
 	convertAnthropicRequestToOpenAIResponses,
 } from "./requests/anthropic-to-openai";
 export { applyClaudeCodeShaping } from "./requests/claude-code";
+export { convertOpenAIResponsesRequestToKimiChat } from "./requests/kimi";
 export {
 	convertOpenAIChatRequestToAnthropic,
 	convertOpenAIChatRequestToOpenAIResponses,

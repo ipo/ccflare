@@ -137,8 +137,14 @@ through a connected provider family chosen from the `model` prefix.
 **Model Prefix Rules:**
 - `openai/<model-id>` → prefers `codex`, then `openai`
 - `anthropic/<model-id>` → prefers `claude-code`, then `anthropic`
+- `kimi/<model-id>` → uses `kimi`
 
-Bare model names are rejected with `400`.
+Unprefixed models use the compatibility route's native family. The OpenAI
+Responses route translates non-streaming Kimi requests through Kimi's
+Chat Completions endpoint; `stream: true` is rejected until Responses stream
+translation is available.
+
+Empty or non-string model values are rejected with `400`.
 
 **Examples:**
 ```bash

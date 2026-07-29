@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import {
 	transformAnthropicResponseToOpenAIChat,
 	transformAnthropicResponseToOpenAIResponses,
+	transformKimiChatResponseToOpenAIResponses,
 } from "./responses";
 
 describe("transformAnthropicResponseToOpenAIResponses", () => {
@@ -266,6 +267,136 @@ describe("transformAnthropicResponseToOpenAIResponses", () => {
 		expect(text).toContain('"text":"Tool summary: Searched in auth/"');
 		expect(text).toContain(
 			'"summary":[{"type":"summary_text","text":"Tool summary: Searched in auth/"}]',
+		);
+	});
+});
+
+describe("transformKimiChatResponseToOpenAIResponses", () => {
+	it("converts text, reasoning, parallel tools, usage, and reverse mappings", async () => {
+		const response = await transformKimiChatResponseToOpenAIResponses(
+			new Response(
+				JSON.stringify({
+					id: "chatcmpl_1",
+					created: 10,
+					model: "k3",
+					choices: [
+						{
+							message: {
+								content: "done",
+								reasoning: "thought",
+								tool_calls: [
+									{
+										id: "call_1",
+										function: {
+											name: "agents.spawn",
+											arguments: '{"task":"test"}',
+										},
+									},
+									{
+										id: "call_2",
+										function: {
+											name: "patch",
+											arguments: '{"input":"diff"}',
+										},
+									},
+								],
+							},
+							finish_reason: "tool_calls",
+						},
+					],
+					usage: {
+						prompt_tokens: 10,
+						completion_tokens: 5,
+						total_tokens: 15,
+						prompt_tokens_details: { cached_tokens: 3 },
+						completion_tokens_details: { reasoning_tokens: 2 },
+					},
+				}),
+			),
+			{
+				model: "kimi/k3",
+				input: "hello",
+				metadata: { fixture: "kimi-json" },
+				tools: [
+					{
+						type: "namespace",
+						name: "agents.",
+						tools: [{ type: "function", name: "spawn", parameters: {} }],
+					},
+					{ type: "custom", name: "patch" },
+				],
+			},
+		);
+		const body = (await response.json()) as Record<string, unknown>;
+		expect(body).toEqual({
+			id: "chatcmpl_1",
+			object: "response",
+			created_at: 10,
+			model: "k3",
+			status: "completed",
+			output: [
+				expect.objectContaining({
+					type: "reasoning",
+					summary: [{ type: "summary_text", text: "thought" }],
+				}),
+				expect.objectContaining({
+					type: "message",
+					content: [{ type: "output_text", text: "done", annotations: [] }],
+				}),
+				expect.objectContaining({
+					type: "function_call",
+					call_id: "call_1",
+					name: "spawn",
+					namespace: "agents.",
+					arguments: '{"task":"test"}',
+				}),
+				expect.objectContaining({
+					type: "custom_tool_call",
+					call_id: "call_2",
+					name: "patch",
+					input: "diff",
+				}),
+			],
+			usage: {
+				input_tokens: 10,
+				output_tokens: 5,
+				total_tokens: 15,
+				input_tokens_details: { cached_tokens: 3 },
+				output_tokens_details: { reasoning_tokens: 2 },
+			},
+			metadata: { fixture: "kimi-json" },
+			tools: expect.any(Array),
+		});
+	});
+
+	it("maps length to incomplete and malformed JSON to failed", async () => {
+		const incomplete = await transformKimiChatResponseToOpenAIResponses(
+			new Response(
+				JSON.stringify({
+					model: "k3",
+					choices: [
+						{ message: { content: "partial" }, finish_reason: "length" },
+					],
+				}),
+			),
+			{ model: "kimi/k3", input: "hello" },
+		);
+		expect(await incomplete.json()).toEqual(
+			expect.objectContaining({
+				status: "incomplete",
+				incomplete_details: { reason: "max_output_tokens" },
+			}),
+		);
+
+		const failed = await transformKimiChatResponseToOpenAIResponses(
+			new Response("not json"),
+			{ model: "kimi/k3", input: "hello" },
+		);
+		expect(await failed.json()).toEqual(
+			expect.objectContaining({
+				status: "failed",
+				error: expect.objectContaining({ code: "invalid_upstream_response" }),
+			}),
 		);
 	});
 });

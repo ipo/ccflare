@@ -178,6 +178,9 @@ export function normalizeOpenAIResponsesConversation(
 		if (itemType === "additional_tools") {
 			continue;
 		}
+		if (itemType === "reasoning") {
+			continue;
+		}
 		if (itemType === "function_call") {
 			const namespace =
 				typeof item.namespace === "string" ? item.namespace : "";
@@ -231,8 +234,9 @@ export function normalizeOpenAIResponsesConversation(
 				role: "tool",
 				toolCallId:
 					typeof item.call_id === "string" ? item.call_id : generateId("call"),
-				content:
-					typeof item.output === "string"
+				content: Array.isArray(item.output)
+					? convertResponsesMessageContentToOpenAI(item.output)
+					: typeof item.output === "string"
 						? item.output
 						: JSON.stringify(item.output ?? ""),
 			});

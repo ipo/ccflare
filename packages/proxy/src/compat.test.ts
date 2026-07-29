@@ -4,6 +4,7 @@ import {
 	ClaudeCodeProvider,
 	CodexProvider,
 	createProviderRegistry,
+	KimiProvider,
 	OpenAIProvider,
 } from "@ccflare/providers";
 import type { Account, AccountProvider } from "@ccflare/types";
@@ -23,6 +24,7 @@ function createProxyContext(
 			new OpenAIProvider(),
 			new ClaudeCodeProvider(),
 			new CodexProvider(),
+			new KimiProvider(),
 		]),
 		strategy: {
 			select(accounts: Account[]) {
@@ -62,7 +64,7 @@ afterEach(() => {
 });
 
 describe("handleCompatibilityProxy", () => {
-	it("returns 400 when the model is missing a family prefix", async () => {
+	it("uses the route-native family when the model is unprefixed", async () => {
 		const response = await handleCompatibilityProxy(
 			new Request("http://localhost:8080/v1/ccflare/openai/chat/completions", {
 				method: "POST",
@@ -80,7 +82,181 @@ describe("handleCompatibilityProxy", () => {
 			throw new Error("Expected a response");
 		}
 
+		expect(response.status).toBe(503);
+	});
+
+	it("rejects Kimi Responses streaming before contacting upstream", async () => {
+		let contacted = false;
+		globalThis.fetch = Object.assign(
+			async () => {
+				contacted = true;
+				return new Response();
+			},
+			{ preconnect: originalFetch.preconnect },
+		) as typeof fetch;
+		const response = await handleCompatibilityProxy(
+			new Request("http://localhost:8080/v1/ccflare/openai/responses", {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({
+					model: "kimi/k3",
+					input: "hello",
+					stream: true,
+				}),
+			}),
+			new URL("http://localhost:8080/v1/ccflare/openai/responses"),
+			createProxyContext({ kimi: [createOAuthAccount("kimi")] }),
+		);
+		if (!response) throw new Error("Expected a response");
 		expect(response.status).toBe(400);
+		expect(await response.json()).toEqual({
+			error:
+				"Kimi Responses compatibility does not support streaming yet; retry with stream: false",
+		});
+		expect(contacted).toBe(false);
+	});
+
+	it("translates a full non-streaming Kimi Responses request and response", async () => {
+		let capturedUrl = "";
+		let capturedBody: unknown;
+		globalThis.fetch = Object.assign(
+			async (input: RequestInfo | URL, init?: RequestInit) => {
+				const upstream = new Request(input, init);
+				capturedUrl = upstream.url;
+				capturedBody = await upstream.json();
+				return new Response(
+					JSON.stringify({
+						id: "chatcmpl_kimi",
+						object: "chat.completion",
+						created: 42,
+						model: "k3",
+						choices: [
+							{
+								index: 0,
+								message: {
+									role: "assistant",
+									content: "hello from Kimi",
+									reasoning_content: "brief thought",
+								},
+								finish_reason: "stop",
+							},
+						],
+						usage: {
+							prompt_tokens: 4,
+							completion_tokens: 3,
+							total_tokens: 7,
+						},
+					}),
+					{ status: 200, headers: { "content-type": "application/json" } },
+				);
+			},
+			{ preconnect: originalFetch.preconnect },
+		) as typeof fetch;
+
+		const requestBody = {
+			model: "kimi/k3",
+			input: "hello",
+			max_output_tokens: 64,
+			prompt_cache_key: "cache-1",
+			reasoning: { effort: "medium" },
+			metadata: { fixture: "handler" },
+		};
+		const response = await handleCompatibilityProxy(
+			new Request("http://localhost:8080/v1/ccflare/openai/responses", {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify(requestBody),
+			}),
+			new URL("http://localhost:8080/v1/ccflare/openai/responses"),
+			createProxyContext({ kimi: [createOAuthAccount("kimi")] }),
+		);
+		if (!response) throw new Error("Expected a response");
+
+		expect(capturedUrl).toBe("https://api.kimi.com/coding/v1/chat/completions");
+		expect(capturedBody).toEqual({
+			model: "k3",
+			messages: [{ role: "user", content: "hello" }],
+			stream: false,
+			max_completion_tokens: 64,
+			prompt_cache_key: "cache-1",
+			thinking: { type: "enabled", effort: "medium" },
+		});
+		expect(await response.json()).toEqual({
+			id: "chatcmpl_kimi",
+			object: "response",
+			created_at: 42,
+			model: "k3",
+			status: "completed",
+			output: [
+				expect.objectContaining({
+					type: "reasoning",
+					summary: [{ type: "summary_text", text: "brief thought" }],
+				}),
+				expect.objectContaining({
+					type: "message",
+					content: [
+						{
+							type: "output_text",
+							text: "hello from Kimi",
+							annotations: [],
+						},
+					],
+				}),
+			],
+			usage: { input_tokens: 4, output_tokens: 3, total_tokens: 7 },
+			max_output_tokens: 64,
+			prompt_cache_key: "cache-1",
+			reasoning: { effort: "medium" },
+			metadata: { fixture: "handler" },
+		});
+	});
+
+	it("preserves an explicit Kimi prefix on the OpenAI Chat route", async () => {
+		let capturedUrl = "";
+		let capturedBody: unknown;
+		globalThis.fetch = Object.assign(
+			async (input: RequestInfo | URL, init?: RequestInit) => {
+				const upstream = new Request(input, init);
+				capturedUrl = upstream.url;
+				capturedBody = await upstream.json();
+				return new Response(
+					JSON.stringify({
+						id: "chatcmpl_native",
+						object: "chat.completion",
+						choices: [
+							{
+								message: { role: "assistant", content: "ok" },
+								finish_reason: "stop",
+							},
+						],
+					}),
+					{ headers: { "content-type": "application/json" } },
+				);
+			},
+			{ preconnect: originalFetch.preconnect },
+		) as typeof fetch;
+
+		const response = await handleCompatibilityProxy(
+			new Request("http://localhost:8080/v1/ccflare/openai/chat/completions", {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({
+					model: "kimi/k3",
+					messages: [{ role: "user", content: "hello" }],
+				}),
+			}),
+			new URL("http://localhost:8080/v1/ccflare/openai/chat/completions"),
+			createProxyContext({ kimi: [createOAuthAccount("kimi")] }),
+		);
+		if (!response) throw new Error("Expected a response");
+		expect(capturedUrl).toBe("https://api.kimi.com/coding/v1/chat/completions");
+		expect(capturedBody).toEqual({
+			model: "k3",
+			messages: [{ role: "user", content: "hello" }],
+		});
+		expect((await response.json()) as unknown).toEqual(
+			expect.objectContaining({ object: "chat.completion" }),
+		);
 	});
 
 	it("returns 503 when the requested family has no usable accounts", async () => {

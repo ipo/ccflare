@@ -6,6 +6,7 @@ import {
 	convertOpenAIChatRequestToAnthropic,
 	convertOpenAIChatRequestToOpenAIResponses,
 	convertOpenAIResponsesRequestToAnthropic,
+	convertOpenAIResponsesRequestToKimiChat,
 	normalizeCodexResponsesRequest,
 } from "./requests";
 
@@ -645,6 +646,311 @@ describe("compat request transforms", () => {
 		expect(output.tool_choice).toEqual({ type: "web_search" });
 		expect(output.input).toEqual([
 			{ type: "message", role: "developer", content: [] },
+		]);
+	});
+
+	it("converts Responses conversations and Kimi request controls", () => {
+		const output = convertOpenAIResponsesRequestToKimiChat(
+			{
+				model: "kimi/k3",
+				instructions: "Be concise.",
+				max_output_tokens: 123,
+				prompt_cache_key: "session-1",
+				reasoning: { effort: "high", keep: "all" },
+				input: [
+					{
+						type: "message",
+						role: "developer",
+						content: [{ type: "input_text", text: "Use repo rules." }],
+					},
+					{
+						type: "message",
+						role: "user",
+						content: [
+							{ type: "input_text", text: "Inspect this" },
+							{
+								type: "input_image",
+								image_url: "https://example.test/image.png",
+							},
+						],
+					},
+					{
+						type: "reasoning",
+						summary: [{ type: "summary_text", text: "Prior thought" }],
+					},
+					{
+						type: "function_call",
+						call_id: "call_1",
+						name: "read",
+						arguments: '{"path":"README.md"}',
+					},
+					{
+						type: "function_call_output",
+						call_id: "call_1",
+						output: [
+							{ type: "input_text", text: "contents" },
+							{
+								type: "input_image",
+								image_url: "https://example.test/result.png",
+							},
+						],
+					},
+				],
+			},
+			"k3",
+		);
+
+		expect(output).toEqual({
+			model: "k3",
+			messages: [
+				{ role: "system", content: "Be concise." },
+				{ role: "system", content: "Use repo rules." },
+				{
+					role: "user",
+					content: [
+						{ type: "text", text: "Inspect this" },
+						{
+							type: "image_url",
+							image_url: { url: "https://example.test/image.png" },
+						},
+					],
+				},
+				{
+					role: "assistant",
+					reasoning_content: "Prior thought",
+					tool_calls: [
+						{
+							id: "call_1",
+							type: "function",
+							function: {
+								name: "read",
+								arguments: '{"path":"README.md"}',
+							},
+						},
+					],
+				},
+				{
+					role: "tool",
+					tool_call_id: "call_1",
+					content: [
+						{ type: "text", text: "contents" },
+						{
+							type: "image_url",
+							image_url: { url: "https://example.test/result.png" },
+						},
+					],
+				},
+			],
+			stream: false,
+			max_completion_tokens: 123,
+			prompt_cache_key: "session-1",
+			thinking: { type: "enabled", effort: "high", keep: "all" },
+		});
+	});
+
+	it("projects Kimi tools, choices, schemas, and structured output", () => {
+		const output = convertOpenAIResponsesRequestToKimiChat(
+			{
+				input: "Run tools",
+				tools: [
+					{
+						type: "function",
+						name: "$web_search",
+						parameters: {},
+					},
+					{
+						type: "namespace",
+						name: "agents.",
+						tools: [
+							{
+								type: "function",
+								name: "spawn",
+								parameters: {
+									type: "object",
+									$defs: { mode: { enum: ["fast", "safe"] } },
+									properties: { mode: { $ref: "#/$defs/mode" } },
+								},
+							},
+						],
+					},
+					{ type: "custom", name: "patch", description: "Patch text" },
+				],
+				tool_choice: {
+					type: "function",
+					name: "spawn",
+					namespace: "agents.",
+				},
+				text: {
+					format: {
+						type: "json_schema",
+						name: "answer",
+						strict: true,
+						schema: { properties: { ok: { const: true } } },
+					},
+				},
+			},
+			"kimi-for-coding",
+		);
+
+		expect(output.tools).toEqual([
+			{ type: "builtin_function", function: { name: "$web_search" } },
+			{
+				type: "function",
+				function: {
+					name: "agents.spawn",
+					description: "",
+					parameters: {
+						type: "object",
+						properties: { mode: { enum: ["fast", "safe"], type: "string" } },
+					},
+				},
+			},
+			{
+				type: "function",
+				function: {
+					name: "patch",
+					description: "Patch text",
+					parameters: {
+						type: "object",
+						properties: { input: { type: "string" } },
+						required: ["input"],
+						additionalProperties: false,
+					},
+				},
+			},
+		]);
+		expect(output.tool_choice).toEqual({
+			type: "function",
+			function: { name: "agents.spawn" },
+		});
+		expect(output.response_format).toEqual({
+			type: "json_schema",
+			json_schema: {
+				name: "answer",
+				strict: true,
+				schema: { properties: { ok: { const: true, type: "boolean" } } },
+			},
+		});
+	});
+
+	it("maps disabled and boolean coding-model thinking", () => {
+		expect(
+			convertOpenAIResponsesRequestToKimiChat(
+				{ input: "x", reasoning: { effort: "none" } },
+				"kimi-for-coding",
+			).thinking,
+		).toEqual({ type: "disabled" });
+		expect(
+			convertOpenAIResponsesRequestToKimiChat(
+				{ input: "x", reasoning: { effort: "minimal" }, stream: true },
+				"kimi-for-coding",
+			),
+		).toEqual(
+			expect.objectContaining({
+				thinking: { type: "enabled" },
+				stream_options: { include_usage: true },
+			}),
+		);
+	});
+
+	it("normalizes nested Draft-7 dependency schemas for Kimi", () => {
+		const output = convertOpenAIResponsesRequestToKimiChat(
+			{
+				input: "Validate configuration",
+				tools: [
+					{
+						type: "function",
+						name: "configure",
+						parameters: {
+							type: "object",
+							properties: {
+								settings: {
+									dependencies: {
+										mode: {
+											properties: {
+												enabled: { const: true },
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				],
+			},
+			"k3",
+		);
+
+		expect(output.tools).toEqual([
+			{
+				type: "function",
+				function: {
+					name: "configure",
+					description: "",
+					parameters: {
+						type: "object",
+						properties: {
+							settings: {
+								type: "object",
+								dependencies: {
+									mode: {
+										type: "object",
+										properties: {
+											enabled: { const: true, type: "boolean" },
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		]);
+	});
+
+	it("backfills reasoning only when keep-all thinking remains enabled", () => {
+		const input = [
+			{
+				type: "function_call",
+				call_id: "call_1",
+				name: "lookup",
+				arguments: '{"q":"test"}',
+			},
+		];
+		const enabled = convertOpenAIResponsesRequestToKimiChat(
+			{ input, reasoning: { effort: "high", keep: "all" } },
+			"k3",
+		);
+		expect(enabled.messages).toEqual([
+			{
+				role: "assistant",
+				reasoning_content: "",
+				tool_calls: [
+					{
+						id: "call_1",
+						type: "function",
+						function: { name: "lookup", arguments: '{"q":"test"}' },
+					},
+				],
+			},
+		]);
+
+		const disabled = convertOpenAIResponsesRequestToKimiChat(
+			{ input, reasoning: { effort: "none", keep: "all" } },
+			"k3",
+		);
+		expect(disabled.thinking).toEqual({ type: "disabled" });
+		expect(disabled.messages).toEqual([
+			{
+				role: "assistant",
+				tool_calls: [
+					{
+						id: "call_1",
+						type: "function",
+						function: { name: "lookup", arguments: '{"q":"test"}' },
+					},
+				],
+			},
 		]);
 	});
 });

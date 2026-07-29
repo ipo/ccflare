@@ -18,7 +18,7 @@ import { getValidAccessToken } from "../handlers/token-manager";
 import type { ProxyContext } from "../proxy";
 import { isRateLimitExemptModel } from "../rate-limit-exemptions";
 import { forwardToClient } from "../response-handler";
-import { type StrippedModel, stripCompatibilityModelPrefix } from "./model-id";
+import { resolveCompatibilityModel, type StrippedModel } from "./model-id";
 import { COMPAT_PROVIDER_ORDER, parseCompatibilityRoute } from "./route-parser";
 import {
 	applyClaudeCodeShaping,
@@ -27,11 +27,13 @@ import {
 	convertOpenAIChatRequestToAnthropic,
 	convertOpenAIChatRequestToOpenAIResponses,
 	convertOpenAIResponsesRequestToAnthropic,
+	convertOpenAIResponsesRequestToKimiChat,
 	normalizeCodexResponsesRequest,
 } from "./transforms/requests";
 import {
 	transformAnthropicResponseToOpenAIChat,
 	transformAnthropicResponseToOpenAIResponses,
+	transformKimiChatResponseToOpenAIResponses,
 	transformOpenAIChatResponseToAnthropic,
 	transformOpenAIResponsesResponseToAnthropic,
 	transformOpenAIResponsesResponseToOpenAIChat,
@@ -147,7 +149,7 @@ function buildExecutionPlan(
 				};
 			}
 
-			if (actualProvider === "openai") {
+			if (actualProvider === "openai" || actualProvider === "kimi") {
 				return {
 					upstreamPath: "/chat/completions",
 					providerName: actualProvider,
@@ -170,7 +172,7 @@ function buildExecutionPlan(
 			};
 		}
 		case "openai-chat-completions": {
-			if (actualProvider === "openai") {
+			if (actualProvider === "openai" || actualProvider === "kimi") {
 				return {
 					upstreamPath: "/chat/completions",
 					providerName: actualProvider,
@@ -200,6 +202,18 @@ function buildExecutionPlan(
 			};
 		}
 		case "openai-responses": {
+			if (actualProvider === "kimi") {
+				return {
+					upstreamPath: "/chat/completions",
+					providerName: actualProvider,
+					body: convertOpenAIResponsesRequestToKimiChat(
+						requestBody,
+						stripped.model,
+					),
+					transformResponse: (response) =>
+						transformKimiChatResponseToOpenAIResponses(response, requestBody),
+				};
+			}
 			if (actualProvider === "openai" || actualProvider === "codex") {
 				return {
 					upstreamPath: "/responses",
@@ -403,11 +417,25 @@ export async function handleCompatibilityProxy(
 		);
 	}
 
-	const model = stripCompatibilityModelPrefix(requestBodyJson.model);
+	const model = resolveCompatibilityModel(
+		requestBodyJson.model,
+		route.nativeFamily,
+	);
 	if (!model) {
 		return buildCompatibilityError(
 			400,
-			"Compatibility routes require model values like 'openai/<model-id>' or 'anthropic/<model-id>'",
+			"Compatibility routes require a non-empty model",
+		);
+	}
+
+	if (
+		route.kind === "openai-responses" &&
+		model.family === "kimi" &&
+		requestBodyJson.stream === true
+	) {
+		return buildCompatibilityError(
+			400,
+			"Kimi Responses compatibility does not support streaming yet; retry with stream: false",
 		);
 	}
 

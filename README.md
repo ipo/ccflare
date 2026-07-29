@@ -58,6 +58,12 @@ the `model` prefix:
 
 - `openai/<model-id>` → prefers `codex`, then `openai`
 - `anthropic/<model-id>` → prefers `claude-code`, then `anthropic`
+- `kimi/<model-id>` → uses `kimi`
+
+An unprefixed model uses the route's native family (`openai` on OpenAI
+compatibility routes and `anthropic` on Anthropic compatibility routes).
+Non-streaming OpenAI Responses requests can target Kimi; Kimi Responses
+streaming is not yet supported.
 
 Examples:
 

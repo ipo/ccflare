@@ -1,4 +1,4 @@
-export type ModelFamilyAlias = "anthropic" | "openai";
+export type ModelFamilyAlias = "anthropic" | "kimi" | "openai";
 
 export type StrippedModel = {
 	family: ModelFamilyAlias;
@@ -20,7 +20,10 @@ export function stripCompatibilityModelPrefix(
 
 	const family = trimmed.slice(0, separator);
 	const modelId = trimmed.slice(separator + 1).trim();
-	if ((family !== "anthropic" && family !== "openai") || modelId.length === 0) {
+	if (
+		(family !== "anthropic" && family !== "kimi" && family !== "openai") ||
+		modelId.length === 0
+	) {
 		return null;
 	}
 
@@ -28,6 +31,27 @@ export function stripCompatibilityModelPrefix(
 		family,
 		model: modelId,
 	};
+}
+
+export function resolveCompatibilityModel(
+	model: unknown,
+	nativeFamily: ModelFamilyAlias,
+): StrippedModel | null {
+	if (typeof model !== "string") {
+		return null;
+	}
+
+	const trimmed = model.trim();
+	if (!trimmed) {
+		return null;
+	}
+
+	return (
+		stripCompatibilityModelPrefix(trimmed) ?? {
+			family: nativeFamily,
+			model: trimmed,
+		}
+	);
 }
 
 export function normalizeTrackedModel(model: unknown): string | undefined {
