@@ -72,7 +72,13 @@ let tempDir: string | null = null;
 const originalFetch = globalThis.fetch;
 const upstreamRequests: UpstreamRequest[] = [];
 
+type StreamingTarget =
+	| "anthropic-messages"
+	| "openai-responses"
+	| "codex-responses";
+
 type StreamingCausality = {
+	target: StreamingTarget;
 	expectedInitialEvent: string;
 	initialEventObserved: () => void;
 	waitForInitialEvent: () => Promise<void>;
@@ -83,6 +89,7 @@ type StreamingCausality = {
 let activeStreamingCausality: StreamingCausality | null = null;
 
 function createStreamingCausality(
+	target: StreamingTarget,
 	expectedInitialEvent: string,
 ): StreamingCausality {
 	let initialEventWasObserved = false;
@@ -94,6 +101,7 @@ function createStreamingCausality(
 	});
 
 	return {
+		target,
 		expectedInitialEvent,
 		initialEventObserved: () => {
 			if (!initialEventWasObserved) {
@@ -108,17 +116,16 @@ function createStreamingCausality(
 }
 
 async function releaseFollowUpAfterInitialEvent(
+	target: StreamingTarget,
 	expectedInitialEvent: string,
 ): Promise<void> {
 	const causality = activeStreamingCausality;
-	if (!causality) {
+	if (
+		!causality ||
+		causality.target !== target ||
+		causality.expectedInitialEvent !== expectedInitialEvent
+	) {
 		return;
-	}
-
-	if (causality.expectedInitialEvent !== expectedInitialEvent) {
-		throw new Error(
-			`Expected an active stream waiting for ${expectedInitialEvent}`,
-		);
 	}
 
 	await causality.waitForInitialEvent();
@@ -177,6 +184,7 @@ async function runCurl(args: string[]): Promise<CurlResponse> {
 async function runStreamingCurl(
 	path: string,
 	body: string,
+	target: StreamingTarget,
 	expectedInitialEvent: string,
 ): Promise<{
 	status: number;
@@ -184,7 +192,7 @@ async function runStreamingCurl(
 	body: string;
 	followUpReleasedAfterInitialEvent: boolean;
 }> {
-	const causality = createStreamingCausality(expectedInitialEvent);
+	const causality = createStreamingCausality(target, expectedInitialEvent);
 	activeStreamingCausality = causality;
 
 	try {
@@ -243,27 +251,41 @@ async function runStreamingCurl(
 }
 
 describe("Streaming causality gate", () => {
-	it("ignores unrelated streams without a gate while rejecting mismatched gates", async () => {
-		const causality = createStreamingCausality("event: response.created");
+	it("scopes same-event releases to the targeted stream", async () => {
+		const causality = createStreamingCausality(
+			"openai-responses",
+			"event: response.created",
+		);
 		activeStreamingCausality = causality;
 
 		try {
-			await expect(
-				releaseFollowUpAfterInitialEvent("event: message_start"),
-			).rejects.toThrow(
-				"Expected an active stream waiting for event: message_start",
+			await releaseFollowUpAfterInitialEvent(
+				"codex-responses",
+				"event: response.created",
+			);
+			expect(causality.followUpReleasedAfterInitialEvent).toBe(false);
+			await releaseFollowUpAfterInitialEvent(
+				"openai-responses",
+				"event: message_start",
 			);
 			expect(causality.followUpReleasedAfterInitialEvent).toBe(false);
 
 			causality.initialEventObserved();
-			await releaseFollowUpAfterInitialEvent("event: response.created");
+			await releaseFollowUpAfterInitialEvent(
+				"openai-responses",
+				"event: response.created",
+			);
 			expect(causality.followUpReleasedAfterInitialEvent).toBe(true);
 
 			activeStreamingCausality = null;
 			const missingCausality = createStreamingCausality(
+				"codex-responses",
 				"event: response.created",
 			);
-			await releaseFollowUpAfterInitialEvent("event: response.created");
+			await releaseFollowUpAfterInitialEvent(
+				"codex-responses",
+				"event: response.created",
+			);
 			expect(missingCausality.followUpReleasedAfterInitialEvent).toBe(false);
 		} finally {
 			if (activeStreamingCausality === causality) {
@@ -513,7 +535,10 @@ describe("Anthropic passthrough integration", () => {
 										].join("\n"),
 									),
 								);
-								await releaseFollowUpAfterInitialEvent("event: message_start");
+								await releaseFollowUpAfterInitialEvent(
+									"anthropic-messages",
+									"event: message_start",
+								);
 								controller.enqueue(
 									encoder.encode(
 										[
@@ -664,6 +689,7 @@ describe("Anthropic passthrough integration", () => {
 									),
 								);
 								await releaseFollowUpAfterInitialEvent(
+									"codex-responses",
 									"event: response.created",
 								);
 								controller.enqueue(
@@ -873,6 +899,7 @@ describe("Anthropic passthrough integration", () => {
 									),
 								);
 								await releaseFollowUpAfterInitialEvent(
+									"openai-responses",
 									"event: response.created",
 								);
 								controller.enqueue(
@@ -1068,6 +1095,7 @@ describe("Anthropic passthrough integration", () => {
 				stream: true,
 				messages: [{ role: "user", content: "stream hello" }],
 			}),
+			"anthropic-messages",
 			"event: message_start",
 		);
 		expect(streamingResponse.status).toBe(200);
@@ -1233,6 +1261,7 @@ describe("Anthropic passthrough integration", () => {
 				stream: true,
 				input: "stream hello",
 			}),
+			"openai-responses",
 			"event: response.created",
 		);
 		expect(openAIResponsesStream.status).toBe(200);
@@ -1362,6 +1391,7 @@ describe("Anthropic passthrough integration", () => {
 				stream: true,
 				input: "stream codex output",
 			}),
+			"codex-responses",
 			"event: response.created",
 		);
 		expect(codexStream.status).toBe(200);
