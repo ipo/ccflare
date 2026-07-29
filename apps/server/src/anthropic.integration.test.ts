@@ -271,6 +271,33 @@ describe("Streaming causality gate", () => {
 			}
 		}
 	});
+
+	it("keeps operation-scoped upstream assertions valid after unrelated appends", () => {
+		const requestStart = upstreamRequests.length;
+		const expectedRequest: UpstreamRequest = {
+			url: "https://api.openai.com/v1/models?foo=bar",
+			method: "GET",
+			headers: {},
+			body: null,
+		};
+
+		try {
+			upstreamRequests.push(expectedRequest, {
+				url: "https://chatgpt.com/backend-api/codex/responses",
+				method: "POST",
+				headers: {},
+				body: '{"stream":true}',
+			});
+
+			expect(
+				upstreamRequests
+					.slice(requestStart)
+					.find((request) => request.url === expectedRequest.url),
+			).toBe(expectedRequest);
+		} finally {
+			upstreamRequests.length = requestStart;
+		}
+	});
 });
 
 async function waitFor<T>(
@@ -1244,6 +1271,7 @@ describe("Anthropic passthrough integration", () => {
 			outputTokens: 5,
 		});
 
+		const openAIModelsRequestStart = upstreamRequests.length;
 		const openAIModelsResponse = await runCurl([
 			`${SERVER_URL}/v1/openai/models?foo=bar`,
 		]);
@@ -1253,9 +1281,14 @@ describe("Anthropic passthrough integration", () => {
 				foo: "bar",
 			},
 		});
-		expect(upstreamRequests.at(-1)?.url).toBe(
-			"https://api.openai.com/v1/models?foo=bar",
-		);
+		expect(
+			upstreamRequests
+				.slice(openAIModelsRequestStart)
+				.find(
+					(request) =>
+						request.url === "https://api.openai.com/v1/models?foo=bar",
+				),
+		).toBeDefined();
 
 		const createdClaudeAccount = await createAccount({
 			name: "claude-code-oauth",
