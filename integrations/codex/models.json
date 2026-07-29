@@ -1,13 +1,37 @@
 {
   "models": [
     {
+      "slug": "gpt-5.6-sol",
+      "aliases": ["5.6-sol", "openai/gpt-5.6-sol"],
+      "multi_agent_version": "v2"
+    },
+    {
+      "slug": "gpt-5.6-terra",
+      "aliases": ["5.6-terra", "openai/gpt-5.6-terra"],
+      "multi_agent_version": "v2"
+    },
+    {
+      "slug": "gpt-5.6-luna",
+      "aliases": ["5.6-luna", "openai/gpt-5.6-luna"],
+      "multi_agent_version": "v2"
+    },
+    {
+      "slug": "gpt-5.5",
+      "aliases": ["5.5", "openai/gpt-5.5"],
+      "multi_agent_version": "v2"
+    },
+    {
       "slug": "gpt-5.4",
       "visibility": "list",
-      "max_context_window": 272000
+      "max_context_window": 272000,
+      "aliases": ["5.4", "openai/gpt-5.4"],
+      "multi_agent_version": "v2"
     },
     {
       "slug": "gpt-5.4-mini",
-      "visibility": "list"
+      "visibility": "list",
+      "aliases": ["5.4-mini", "openai/gpt-5.4-mini"],
+      "multi_agent_version": "v2"
     },
     {
       "slug": "gpt-5.2",
@@ -32,7 +56,9 @@
       "priority": 7,
       "context_window": 128000,
       "max_context_window": 128000,
-      "input_modalities": ["text"]
+      "input_modalities": ["text"],
+      "aliases": ["5.3-spark", "openai/gpt-5.3-codex-spark"],
+      "multi_agent_version": "v2"
     },
     {
       "slug": "anthropic/claude-fable-5",
@@ -61,7 +87,8 @@
       "supports_search_tool": false,
       "use_responses_lite": true,
       "tool_mode": "direct",
-      "multi_agent_version": null
+      "aliases": ["fable-5"],
+      "multi_agent_version": "v2"
     },
     {
       "slug": "anthropic/claude-opus-5",
@@ -91,7 +118,8 @@
       "supports_search_tool": false,
       "use_responses_lite": true,
       "tool_mode": "direct",
-      "multi_agent_version": null
+      "aliases": ["opus-5"],
+      "multi_agent_version": "v2"
     },
     {
       "slug": "anthropic/claude-opus-4-8",
@@ -121,7 +149,8 @@
       "supports_search_tool": false,
       "use_responses_lite": true,
       "tool_mode": "direct",
-      "multi_agent_version": null
+      "aliases": ["opus-4.8"],
+      "multi_agent_version": "v2"
     },
     {
       "slug": "anthropic/claude-sonnet-5",
@@ -151,7 +180,8 @@
       "supports_search_tool": false,
       "use_responses_lite": true,
       "tool_mode": "direct",
-      "multi_agent_version": null
+      "aliases": ["sonnet-5"],
+      "multi_agent_version": "v2"
     },
     {
       "slug": "anthropic/claude-haiku-4-5-20251001",
@@ -181,7 +211,8 @@
       "supports_search_tool": false,
       "use_responses_lite": true,
       "tool_mode": "direct",
-      "multi_agent_version": null
+      "aliases": ["haiku-4.5"],
+      "multi_agent_version": "v2"
     },
     {
       "slug": "kimi/k3",
@@ -208,7 +239,8 @@
       "supports_search_tool": false,
       "use_responses_lite": true,
       "tool_mode": "direct",
-      "multi_agent_version": null
+      "aliases": ["k3"],
+      "multi_agent_version": "v2"
     },
     {
       "slug": "kimi/k3-256k",
@@ -235,7 +267,8 @@
       "supports_search_tool": false,
       "use_responses_lite": true,
       "tool_mode": "direct",
-      "multi_agent_version": null
+      "aliases": ["k3-256k"],
+      "multi_agent_version": "v2"
     },
     {
       "slug": "kimi/kimi-for-coding",
@@ -261,7 +294,8 @@
       "supports_search_tool": false,
       "use_responses_lite": true,
       "tool_mode": "direct",
-      "multi_agent_version": null
+      "aliases": ["kimi-2.7", "kimi-for-coding"],
+      "multi_agent_version": "v2"
     },
     {
       "slug": "kimi/kimi-for-coding-highspeed",
@@ -287,7 +321,8 @@
       "supports_search_tool": false,
       "use_responses_lite": true,
       "tool_mode": "direct",
-      "multi_agent_version": null
+      "aliases": ["kimi-2.7-fast", "kimi-for-coding-highspeed"],
+      "multi_agent_version": "v2"
     }
   ]
 }

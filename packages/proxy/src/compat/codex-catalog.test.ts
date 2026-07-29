@@ -3,8 +3,10 @@ import { resolveCompatibilityModel } from "./model-id";
 
 type CatalogEntry = {
 	slug: string;
+	aliases?: string[];
 	inherits?: string;
 	visibility?: "list" | "hide" | "none";
+	multi_agent_version?: "disabled" | "v1" | "v2" | null;
 	context_window?: number;
 	max_context_window?: number;
 	input_modalities?: string[];
@@ -48,6 +50,27 @@ const expectedPickerModels = [
 	...anthropicModels,
 	...kimiModels,
 ];
+const expectedAliases: Record<string, string[]> = {
+	"gpt-5.6-sol": ["5.6-sol", "openai/gpt-5.6-sol"],
+	"gpt-5.6-terra": ["5.6-terra", "openai/gpt-5.6-terra"],
+	"gpt-5.6-luna": ["5.6-luna", "openai/gpt-5.6-luna"],
+	"gpt-5.5": ["5.5", "openai/gpt-5.5"],
+	"gpt-5.4": ["5.4", "openai/gpt-5.4"],
+	"gpt-5.4-mini": ["5.4-mini", "openai/gpt-5.4-mini"],
+	"gpt-5.3-codex-spark": ["5.3-spark", "openai/gpt-5.3-codex-spark"],
+	"anthropic/claude-fable-5": ["fable-5"],
+	"anthropic/claude-opus-5": ["opus-5"],
+	"anthropic/claude-opus-4-8": ["opus-4.8"],
+	"anthropic/claude-sonnet-5": ["sonnet-5"],
+	"anthropic/claude-haiku-4-5-20251001": ["haiku-4.5"],
+	"kimi/k3": ["k3"],
+	"kimi/k3-256k": ["k3-256k"],
+	"kimi/kimi-for-coding": ["kimi-2.7", "kimi-for-coding"],
+	"kimi/kimi-for-coding-highspeed": [
+		"kimi-2.7-fast",
+		"kimi-for-coding-highspeed",
+	],
+};
 
 function entry(slug: string): CatalogEntry {
 	const found = overlay.models.find((candidate) => candidate.slug === slug);
@@ -66,12 +89,35 @@ describe("Codex catalog overlay", () => {
 		const slugs = overlay.models.map(({ slug }) => slug);
 		expect(new Set(slugs).size).toBe(slugs.length);
 		expect(slugs.filter((slug) => slug.startsWith("openai/"))).toEqual([]);
+		expect(Object.keys(expectedAliases)).toEqual(expectedPickerModels);
 		for (const slug of [
 			...anthropicModels,
 			...kimiModels,
 			"gpt-5.3-codex-spark",
 		]) {
 			expect(entry(slug).inherits).toBe("gpt-5.6-sol");
+		}
+	});
+
+	it("publishes complete ordered aliases without duplicates or collisions", () => {
+		const canonicalSlugs = new Set(
+			overlay.models.map(({ slug }) => slug.toLowerCase()),
+		);
+		const aliasOwners = new Map<string, string>();
+
+		for (const slug of expectedPickerModels) {
+			const aliases = entry(slug).aliases ?? [];
+			expect(aliases).toEqual(expectedAliases[slug]);
+			expect(new Set(aliases.map((alias) => alias.toLowerCase())).size).toBe(
+				aliases.length,
+			);
+
+			for (const alias of aliases) {
+				const normalized = alias.toLowerCase();
+				expect(canonicalSlugs.has(normalized)).toBe(false);
+				expect(aliasOwners.has(normalized)).toBe(false);
+				aliasOwners.set(normalized, slug);
+			}
 		}
 	});
 
@@ -115,7 +161,6 @@ describe("Codex catalog overlay", () => {
 				supports_search_tool: false,
 				supports_parallel_tool_calls: true,
 				experimental_supported_tools: [],
-				multi_agent_version: null,
 			});
 		}
 	});
@@ -141,6 +186,17 @@ describe("Codex catalog overlay", () => {
 		expect(picker).toEqual(expectedPickerModels);
 		expect(entry("gpt-5.2").visibility).toBe("none");
 		expect(entry("codex-auto-review").visibility).toBe("none");
+	});
+
+	it("marks every picker model as V2 compatible without changing hidden models", () => {
+		for (const slug of expectedPickerModels) {
+			expect(entry(slug).multi_agent_version).toBe("v2");
+		}
+
+		for (const slug of ["gpt-5.2", "codex-auto-review"]) {
+			expect(entry(slug)).toMatchObject({ visibility: "none" });
+			expect(entry(slug)).not.toHaveProperty("multi_agent_version");
+		}
 	});
 
 	it("retains canonical model slugs while routing every family through one provider", () => {

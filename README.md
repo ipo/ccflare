@@ -141,8 +141,10 @@ You can configure both providers at the same time and ccflare will keep account 
 Codex can use one Claudeflare provider for OpenAI, Anthropic, and Kimi selections
 through the Responses compatibility route. Configure the static catalog overlay as
 shown in the [Codex configuration example](docs/configuration.md#codex-unified-model-catalog).
-Use the canonical catalog IDs (for example, `anthropic/claude-sonnet-5` and
-`kimi/k3`), not pi short aliases.
+The picker shows canonical catalog IDs such as `anthropic/claude-sonnet-5` and
+`kimi/k3`, while Codex also accepts the overlay's pi aliases such as `sonnet-5`,
+`5.6-sol`, and `k3`. Codex resolves aliases before sending the canonical ID to
+ccflare; the proxy does not route aliases itself.
 
 ## Example usage
 

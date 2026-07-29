@@ -212,12 +212,15 @@ supports_websockets = false
 ```
 
 The catalog is loaded at Codex startup, so restart Codex after changing
-`integrations/codex/models.json`. Version 1 supports only the canonical catalog
-IDs shown in the picker, such as `anthropic/claude-sonnet-5` and `kimi/k3`; pi
-short aliases such as `opus-5`, `5.6-sol`, and `kimi-2.7` are not supported.
+`integrations/codex/models.json`. The picker shows canonical catalog IDs such as
+`anthropic/claude-sonnet-5` and `kimi/k3`. Codex also accepts the aliases
+published by the overlay, including `opus-5`, `5.6-sol`, and `kimi-2.7`, and
+resolves them to canonical IDs before making a request. The first alias listed
+for each model is Codex's preferred `spawn_agent` selector.
 
-The provider always uses the Responses API. Claudeflare selects and translates
-the upstream OpenAI, Anthropic, or Kimi family from the canonical model ID.
+The provider always uses the Responses API. Claudeflare receives the canonical
+model ID and selects and translates the upstream OpenAI, Anthropic, or Kimi
+family from that ID; alias resolution is not proxy routing.
 
 ### High Throughput Setup
 

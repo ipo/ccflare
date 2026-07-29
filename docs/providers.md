@@ -287,7 +287,10 @@ A model id absent from the catalogue logs one warning and records a cost of 0.
 single `http://127.0.0.1:8080/v1/ccflare/openai` Responses provider. It exposes
 canonical OpenAI IDs without an `openai/` picker duplicate and uses
 `anthropic/` and `kimi/` IDs to select those compatibility families. Restart
-Codex after changing the overlay; pi short aliases are intentionally unsupported.
+Codex after changing the overlay. The overlay publishes pi aliases alongside
+each canonical model, with the preferred `spawn_agent` selector first. Codex
+resolves those aliases to canonical IDs before requests reach Claudeflare, so
+the proxy's model-family routing remains canonical-ID based.
 
 ### Anthropic
 
