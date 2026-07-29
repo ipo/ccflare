@@ -72,6 +72,55 @@ let tempDir: string | null = null;
 const originalFetch = globalThis.fetch;
 const upstreamRequests: UpstreamRequest[] = [];
 
+type StreamingCausality = {
+	expectedInitialEvent: string;
+	initialEventObserved: () => void;
+	waitForInitialEvent: () => Promise<void>;
+	cancel: (reason: Error) => void;
+	followUpReleasedAfterInitialEvent: boolean;
+};
+
+let activeStreamingCausality: StreamingCausality | null = null;
+
+function createStreamingCausality(
+	expectedInitialEvent: string,
+): StreamingCausality {
+	let initialEventWasObserved = false;
+	let resolveInitialEvent!: () => void;
+	let rejectInitialEvent!: (reason: Error) => void;
+	const initialEvent = new Promise<void>((resolve, reject) => {
+		resolveInitialEvent = resolve;
+		rejectInitialEvent = reject;
+	});
+
+	return {
+		expectedInitialEvent,
+		initialEventObserved: () => {
+			if (!initialEventWasObserved) {
+				initialEventWasObserved = true;
+				resolveInitialEvent();
+			}
+		},
+		waitForInitialEvent: () => initialEvent,
+		cancel: (reason) => rejectInitialEvent(reason),
+		followUpReleasedAfterInitialEvent: false,
+	};
+}
+
+async function releaseFollowUpAfterInitialEvent(
+	expectedInitialEvent: string,
+): Promise<void> {
+	const causality = activeStreamingCausality;
+	if (!causality || causality.expectedInitialEvent !== expectedInitialEvent) {
+		throw new Error(
+			`Expected an active stream waiting for ${expectedInitialEvent}`,
+		);
+	}
+
+	await causality.waitForInitialEvent();
+	causality.followUpReleasedAfterInitialEvent = true;
+}
+
 function parseCurlResponse(raw: string): CurlResponse {
 	const normalized = raw.replaceAll("\r\n", "\n");
 	const separatorIndex = normalized.indexOf("\n\n");
@@ -124,72 +173,69 @@ async function runCurl(args: string[]): Promise<CurlResponse> {
 async function runStreamingCurl(
 	path: string,
 	body: string,
+	expectedInitialEvent: string,
 ): Promise<{
 	status: number;
 	headers: Headers;
 	body: string;
-	messageStartAt: number | null;
-	contentDeltaAt: number | null;
+	followUpReleasedAfterInitialEvent: boolean;
 }> {
-	return await new Promise((resolve, reject) => {
-		const startedAt = Date.now();
-		let output = "";
-		let stderr = "";
-		let messageStartAt: number | null = null;
-		let contentDeltaAt: number | null = null;
+	const causality = createStreamingCausality(expectedInitialEvent);
+	activeStreamingCausality = causality;
 
-		const child = spawn("curl", [
-			"-sS",
-			"-N",
-			"-i",
-			"-X",
-			"POST",
-			`${SERVER_URL}${path}`,
-			"-H",
-			"content-type: application/json",
-			"--data",
-			body,
-		]);
+	try {
+		return await new Promise((resolve, reject) => {
+			let output = "";
+			let stderr = "";
 
-		child.stdout.on("data", (chunk) => {
-			output += chunk.toString("utf8");
+			const child = spawn("curl", [
+				"-sS",
+				"-N",
+				"-i",
+				"-X",
+				"POST",
+				`${SERVER_URL}${path}`,
+				"-H",
+				"content-type: application/json",
+				"--data",
+				body,
+			]);
 
-			if (
-				messageStartAt === null &&
-				(output.includes("event: message_start") ||
-					output.includes("event: response.created"))
-			) {
-				messageStartAt = Date.now() - startedAt;
-			}
+			child.stdout.on("data", (chunk) => {
+				output += chunk.toString("utf8");
 
-			if (
-				contentDeltaAt === null &&
-				(output.includes("event: content_block_delta") ||
-					output.includes("event: response.completed"))
-			) {
-				contentDeltaAt = Date.now() - startedAt;
-			}
-		});
+				if (output.includes(expectedInitialEvent)) {
+					causality.initialEventObserved();
+				}
+			});
 
-		child.stderr.on("data", (chunk) => {
-			stderr += chunk.toString("utf8");
-		});
+			child.stderr.on("data", (chunk) => {
+				stderr += chunk.toString("utf8");
+			});
 
-		child.on("error", reject);
-		child.on("close", (code) => {
-			if (code !== 0) {
-				reject(new Error(stderr || `curl exited with code ${code}`));
-				return;
-			}
+			child.on("error", reject);
+			child.on("close", (code) => {
+				if (code !== 0) {
+					reject(new Error(stderr || `curl exited with code ${code}`));
+					return;
+				}
 
-			const response = parseCurlResponse(output);
-			resolve({
-				...response,
-				messageStartAt,
-				contentDeltaAt,
+				const response = parseCurlResponse(output);
+				resolve({
+					...response,
+					followUpReleasedAfterInitialEvent:
+						causality.followUpReleasedAfterInitialEvent,
+				});
 			});
 		});
-	});
+	} finally {
+		if (activeStreamingCausality === causality) {
+			activeStreamingCausality = null;
+		}
+		causality.cancel(
+			new Error("Streaming curl completed before the gate closed"),
+		);
+	}
 }
 
 async function waitFor<T>(
@@ -405,7 +451,7 @@ describe("Anthropic passthrough integration", () => {
 										].join("\n"),
 									),
 								);
-								await Bun.sleep(250);
+								await releaseFollowUpAfterInitialEvent("event: message_start");
 								controller.enqueue(
 									encoder.encode(
 										[
@@ -555,7 +601,9 @@ describe("Anthropic passthrough integration", () => {
 										].join("\n"),
 									),
 								);
-								await Bun.sleep(220);
+								await releaseFollowUpAfterInitialEvent(
+									"event: response.created",
+								);
 								controller.enqueue(
 									encoder.encode(
 										[
@@ -762,7 +810,9 @@ describe("Anthropic passthrough integration", () => {
 										].join("\n"),
 									),
 								);
-								await Bun.sleep(250);
+								await releaseFollowUpAfterInitialEvent(
+									"event: response.created",
+								);
 								controller.enqueue(
 									encoder.encode(
 										[
@@ -956,6 +1006,7 @@ describe("Anthropic passthrough integration", () => {
 				stream: true,
 				messages: [{ role: "user", content: "stream hello" }],
 			}),
+			"event: message_start",
 		);
 		expect(streamingResponse.status).toBe(200);
 		expect(streamingResponse.headers.get("content-type")).toContain(
@@ -963,10 +1014,7 @@ describe("Anthropic passthrough integration", () => {
 		);
 		expect(streamingResponse.body).toContain("event: message_start");
 		expect(streamingResponse.body).toContain("event: content_block_delta");
-		expect(streamingResponse.messageStartAt).not.toBeNull();
-		expect(streamingResponse.contentDeltaAt).not.toBeNull();
-		expect(streamingResponse.messageStartAt as number).toBeLessThan(150);
-		expect(streamingResponse.contentDeltaAt as number).toBeGreaterThan(200);
+		expect(streamingResponse.followUpReleasedAfterInitialEvent).toBe(true);
 
 		const createOpenAIAccountResponse = await runCurl([
 			"-X",
@@ -1123,6 +1171,7 @@ describe("Anthropic passthrough integration", () => {
 				stream: true,
 				input: "stream hello",
 			}),
+			"event: response.created",
 		);
 		expect(openAIResponsesStream.status).toBe(200);
 		expect(openAIResponsesStream.headers.get("content-type")).toContain(
@@ -1130,10 +1179,7 @@ describe("Anthropic passthrough integration", () => {
 		);
 		expect(openAIResponsesStream.body).toContain("event: response.created");
 		expect(openAIResponsesStream.body).toContain("event: response.completed");
-		expect(openAIResponsesStream.messageStartAt).not.toBeNull();
-		expect(openAIResponsesStream.contentDeltaAt).not.toBeNull();
-		expect(openAIResponsesStream.messageStartAt as number).toBeLessThan(150);
-		expect(openAIResponsesStream.contentDeltaAt as number).toBeGreaterThan(200);
+		expect(openAIResponsesStream.followUpReleasedAfterInitialEvent).toBe(true);
 		expect(upstreamRequests.at(-1)?.url).toBe(
 			"https://api.openai.com/v1/responses",
 		);
@@ -1248,15 +1294,13 @@ describe("Anthropic passthrough integration", () => {
 				stream: true,
 				input: "stream codex output",
 			}),
+			"event: response.created",
 		);
 		expect(codexStream.status).toBe(200);
 		expect(codexStream.headers.get("content-type")).toContain(
 			"text/event-stream",
 		);
-		expect(codexStream.messageStartAt).not.toBeNull();
-		expect(codexStream.contentDeltaAt).not.toBeNull();
-		expect(codexStream.messageStartAt as number).toBeLessThan(150);
-		expect(codexStream.contentDeltaAt as number).toBeGreaterThan(200);
+		expect(codexStream.followUpReleasedAfterInitialEvent).toBe(true);
 		expect(codexStream.body.replaceAll("\r\n", "\n")).toContain(
 			"event: response.created",
 		);
