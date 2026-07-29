@@ -1,5 +1,14 @@
 import { describe, expect, it } from "bun:test";
-import { readdirSync, readFileSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readdirSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const REPO_ROOT = join(import.meta.dir, "../../..");
@@ -16,12 +25,16 @@ function readJsonFile<T>(filePath: string): T {
 	return JSON.parse(readFileSync(filePath, "utf8")) as T;
 }
 
-function getPackageManifests(): PackageManifest[] {
-	return readdirSync(PACKAGES_ROOT, { withFileTypes: true })
-		.filter((entry) => entry.isDirectory())
+function getPackageManifests(packagesRoot = PACKAGES_ROOT): PackageManifest[] {
+	return readdirSync(packagesRoot, { withFileTypes: true })
+		.filter(
+			(entry) =>
+				entry.isDirectory() &&
+				existsSync(join(packagesRoot, entry.name, "package.json")),
+		)
 		.map((entry) =>
 			readJsonFile<PackageManifest>(
-				join(PACKAGES_ROOT, entry.name, "package.json"),
+				join(packagesRoot, entry.name, "package.json"),
 			),
 		);
 }
@@ -34,6 +47,25 @@ describe("workspace build and export contracts", () => {
 			.sort();
 
 		expect(missingExports).toEqual([]);
+	});
+
+	it("ignores directories without a package manifest", () => {
+		const packagesRoot = mkdtempSync(join(tmpdir(), "ccflare-packages-"));
+
+		try {
+			mkdirSync(join(packagesRoot, "workspace-package"));
+			writeFileSync(
+				join(packagesRoot, "workspace-package", "package.json"),
+				JSON.stringify({ name: "workspace-package" }),
+			);
+			mkdirSync(join(packagesRoot, "stale-directory"));
+
+			expect(getPackageManifests(packagesRoot)).toEqual([
+				{ name: "workspace-package" },
+			]);
+		} finally {
+			rmSync(packagesRoot, { force: true, recursive: true });
+		}
 	});
 
 	it("exposes the dashboard manifest through a declared package export", () => {
