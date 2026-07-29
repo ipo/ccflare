@@ -1,0 +1,13 @@
+data: {"id":"chatcmpl-kimi-code-captured","object":"chat.completion.chunk","created":1768994256,"model":"kimi-k2-turbo-preview","choices":[{"index":0,"delta":{"reasoning_content":"Let me think. "},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-kimi-code-captured","object":"chat.completion.chunk","created":1768994256,"model":"kimi-k2-turbo-preview","choices":[{"index":0,"delta":{"content":"All set. "},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-kimi-code-captured","object":"chat.completion.chunk","created":1768994256,"model":"kimi-k2-turbo-preview","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_weather","function":{"name":"lookup_weather","arguments":"{\"city\":\""}}]},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-kimi-code-captured","object":"chat.completion.chunk","created":1768994256,"model":"kimi-k2-turbo-preview","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"Shanghai\"}"}}]},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-kimi-code-captured","object":"chat.completion.chunk","created":1768994256,"model":"kimi-k2-turbo-preview","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls","usage":{"prompt_tokens":12,"completion_tokens":6,"total_tokens":18,"cached_tokens":2}}]}
+
+data: [DONE]
+
+:

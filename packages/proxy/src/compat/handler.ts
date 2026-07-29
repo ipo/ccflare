@@ -428,17 +428,6 @@ export async function handleCompatibilityProxy(
 		);
 	}
 
-	if (
-		route.kind === "openai-responses" &&
-		model.family === "kimi" &&
-		requestBodyJson.stream === true
-	) {
-		return buildCompatibilityError(
-			400,
-			"Kimi Responses compatibility does not support streaming yet; retry with stream: false",
-		);
-	}
-
 	const requestMeta = createRequestMetadata(req, url);
 	requestEvents.emit("event", {
 		type: "ingress",

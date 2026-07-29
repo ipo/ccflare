@@ -62,8 +62,8 @@ the `model` prefix:
 
 An unprefixed model uses the route's native family (`openai` on OpenAI
 compatibility routes and `anthropic` on Anthropic compatibility routes).
-Non-streaming OpenAI Responses requests can target Kimi; Kimi Responses
-streaming is not yet supported.
+OpenAI Responses requests can target Kimi in both JSON and streaming modes;
+streaming Kimi Chat Completions events are translated into Responses events.
 
 Examples:
 

@@ -85,35 +85,118 @@ describe("handleCompatibilityProxy", () => {
 		expect(response.status).toBe(503);
 	});
 
-	it("rejects Kimi Responses streaming before contacting upstream", async () => {
-		let contacted = false;
+	it("streams the captured Kimi Code fixture through the public Responses route", async () => {
+		let capturedUrl = "";
+		let capturedBody: unknown;
+		const fixture = await Bun.file(
+			new URL("./compat/fixtures/kimi-code-chat-stream.sse", import.meta.url),
+		).text();
 		globalThis.fetch = Object.assign(
-			async () => {
-				contacted = true;
-				return new Response();
+			async (input: RequestInfo | URL, init?: RequestInit) => {
+				const upstream = new Request(input, init);
+				capturedUrl = upstream.url;
+				capturedBody = await upstream.json();
+				return new Response(fixture, {
+					status: 206,
+					headers: {
+						"content-type": "text/event-stream",
+						"x-kimi-trace": "captured-fixture",
+					},
+				});
 			},
 			{ preconnect: originalFetch.preconnect },
 		) as typeof fetch;
+		const requestBody = {
+			model: "kimi/k3",
+			input: "Check the weather.",
+			stream: true,
+			metadata: { fixture: "kimi-code-captured" },
+			tools: [
+				{
+					type: "function",
+					name: "lookup_weather",
+					description: "Look up weather",
+					parameters: { type: "object" },
+				},
+			],
+		};
+		const response = await handleCompatibilityProxy(
+			new Request("http://localhost:8080/v1/ccflare/openai/responses", {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify(requestBody),
+			}),
+			new URL("http://localhost:8080/v1/ccflare/openai/responses"),
+			createProxyContext({ kimi: [createOAuthAccount("kimi")] }),
+		);
+		if (!response) throw new Error("Expected a response");
+		expect(capturedUrl).toBe("https://api.kimi.com/coding/v1/chat/completions");
+		expect(capturedBody).toEqual({
+			model: "k3",
+			messages: [{ role: "user", content: "Check the weather." }],
+			stream: true,
+			stream_options: { include_usage: true },
+			tools: [
+				{
+					type: "function",
+					function: {
+						name: "lookup_weather",
+						description: "Look up weather",
+						parameters: { type: "object" },
+					},
+				},
+			],
+		});
+		expect(response.status).toBe(206);
+		expect(response.headers.get("x-kimi-trace")).toBe("captured-fixture");
+		const text = await response.text();
+		expect(text).toContain('"type":"response.reasoning_summary_text.delta"');
+		expect(text).toContain('"type":"response.output_text.delta"');
+		expect(text).toContain('"type":"response.function_call_arguments.delta"');
+		expect(text).toContain('"call_id":"call_weather"');
+		expect(text).toContain('"arguments":"{\\"city\\":\\"Shanghai\\"}"');
+		expect(text).toContain('"input_tokens":12');
+		expect(text).toContain('"metadata":{"fixture":"kimi-code-captured"}');
+		expect(text).toContain('"type":"response.completed"');
+	});
+
+	it("fails closed on malformed Kimi tool argument fragments", async () => {
+		const fixture = await Bun.file(
+			new URL(
+				"./compat/fixtures/kimi-malformed-tool-arguments.sse",
+				import.meta.url,
+			),
+		).text();
+		globalThis.fetch = Object.assign(
+			async () =>
+				new Response(fixture, {
+					headers: { "content-type": "text/event-stream" },
+				}),
+			{ preconnect: originalFetch.preconnect },
+		) as typeof fetch;
+
 		const response = await handleCompatibilityProxy(
 			new Request("http://localhost:8080/v1/ccflare/openai/responses", {
 				method: "POST",
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify({
 					model: "kimi/k3",
-					input: "hello",
+					input: "Check the weather.",
 					stream: true,
+					tools: [{ type: "function", name: "lookup_weather", parameters: {} }],
 				}),
 			}),
 			new URL("http://localhost:8080/v1/ccflare/openai/responses"),
 			createProxyContext({ kimi: [createOAuthAccount("kimi")] }),
 		);
 		if (!response) throw new Error("Expected a response");
-		expect(response.status).toBe(400);
-		expect(await response.json()).toEqual({
-			error:
-				"Kimi Responses compatibility does not support streaming yet; retry with stream: false",
-		});
-		expect(contacted).toBe(false);
+
+		const text = await response.text();
+		expect(text).toContain('"type":"response.failed"');
+		expect(text).toContain(
+			'"message":"Kimi tool-call arguments fragment must be a string"',
+		);
+		expect(text).not.toContain('"type":"response.completed"');
 	});
 
 	it("translates a full non-streaming Kimi Responses request and response", async () => {

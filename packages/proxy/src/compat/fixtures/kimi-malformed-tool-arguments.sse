@@ -1,0 +1,7 @@
+data: {"id":"chatcmpl-kimi-malformed-tool","object":"chat.completion.chunk","created":1768994256,"model":"kimi-k2-turbo-preview","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_bad","function":{"name":"lookup_weather","arguments":{"city":"Dubai"}}}]},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-kimi-malformed-tool","object":"chat.completion.chunk","created":1768994256,"model":"kimi-k2-turbo-preview","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}
+
+data: [DONE]
+
+:

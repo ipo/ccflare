@@ -311,6 +311,9 @@ A model id absent from the catalogue logs one warning and records a cost of 0.
 - upstream base URL defaults to `https://api.kimi.com/coding/v1`
 - OpenAI-compatible chat-completions upstream, so URL building, rate-limit
   parsing and usage extraction are inherited from the OpenAI provider
+- Responses compatibility requests are converted to Chat Completions; Kimi
+  SSE reasoning, text, tool-call, usage, and terminal chunks are converted back
+  into the OpenAI Responses event lifecycle
 - access tokens are short-lived (900s), so refresh happens frequently and the
   refresh token is rotated on each refresh
 - plan model ids are aliased onto Moonshot's metered ids for costing; see

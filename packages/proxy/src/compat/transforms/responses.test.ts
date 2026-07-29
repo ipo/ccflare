@@ -5,6 +5,25 @@ import {
 	transformKimiChatResponseToOpenAIResponses,
 } from "./responses";
 
+function kimiSse(...payloads: Array<JsonRecord | "[DONE]">): string {
+	return `${payloads
+		.map((payload) =>
+			payload === "[DONE]"
+				? "data: [DONE]"
+				: `data: ${JSON.stringify(payload)}`,
+		)
+		.join("\n\n")}\n\n`;
+}
+
+type JsonRecord = Record<string, unknown>;
+
+function parseResponseEvents(text: string): JsonRecord[] {
+	return text
+		.split("\n")
+		.filter((line) => line.startsWith("data: {") && !line.includes("[DONE]"))
+		.map((line) => JSON.parse(line.slice(6)) as JsonRecord);
+}
+
 describe("transformAnthropicResponseToOpenAIResponses", () => {
 	it("reverse-maps ordinary, namespaced, and custom tool calls in JSON", async () => {
 		const response = await transformAnthropicResponseToOpenAIResponses(
@@ -396,6 +415,447 @@ describe("transformKimiChatResponseToOpenAIResponses", () => {
 			expect.objectContaining({
 				status: "failed",
 				error: expect.objectContaining({ code: "invalid_upstream_response" }),
+			}),
+		);
+	});
+
+	it("streams ordered reasoning and text events into a completed response", async () => {
+		const response = await transformKimiChatResponseToOpenAIResponses(
+			new Response(
+				kimiSse(
+					{
+						id: "chatcmpl_ordered",
+						created: 11,
+						model: "k3",
+						choices: [
+							{
+								index: 0,
+								delta: {
+									reasoning_content: "first thought",
+									content: "first answer",
+								},
+								finish_reason: null,
+							},
+						],
+					},
+					{
+						choices: [
+							{
+								index: 0,
+								delta: {
+									reasoning: " second thought",
+									content: " second answer",
+								},
+								finish_reason: "stop",
+							},
+						],
+						usage: {
+							prompt_tokens: 7,
+							completion_tokens: 5,
+							total_tokens: 12,
+						},
+					},
+					"[DONE]",
+				),
+				{
+					status: 206,
+					headers: {
+						"content-type": "text/event-stream",
+						"x-kimi-trace": "trace-1",
+					},
+				},
+			),
+			{
+				model: "kimi/k3",
+				stream: true,
+				input: "hello",
+				metadata: { fixture: "ordered" },
+			},
+		);
+		expect(response.status).toBe(206);
+		expect(response.headers.get("x-kimi-trace")).toBe("trace-1");
+		const events = parseResponseEvents(await response.text());
+		expect(events.map((event) => event.type)).toEqual([
+			"response.created",
+			"response.in_progress",
+			"response.output_item.added",
+			"response.reasoning_summary_text.delta",
+			"response.output_item.added",
+			"response.content_part.added",
+			"response.output_text.delta",
+			"response.reasoning_summary_text.delta",
+			"response.output_text.delta",
+			"response.reasoning_summary_text.done",
+			"response.output_item.done",
+			"response.output_text.done",
+			"response.content_part.done",
+			"response.output_item.done",
+			"response.completed",
+		]);
+		const terminal = events.at(-1) as {
+			response: {
+				output: JsonRecord[];
+				usage: JsonRecord;
+				metadata: JsonRecord;
+			};
+		};
+		expect(terminal.response.output).toEqual([
+			expect.objectContaining({
+				type: "reasoning",
+				summary: [
+					{ type: "summary_text", text: "first thought second thought" },
+				],
+			}),
+			expect.objectContaining({
+				type: "message",
+				content: [
+					expect.objectContaining({ text: "first answer second answer" }),
+				],
+			}),
+		]);
+		expect(terminal.response.usage).toEqual({
+			input_tokens: 7,
+			output_tokens: 5,
+			total_tokens: 12,
+		});
+		expect(terminal.response.metadata).toEqual({ fixture: "ordered" });
+	});
+
+	it("reconstructs fragmented interleaved ordinary, namespace, and custom tools", async () => {
+		const chunks: JsonRecord[] = [
+			{
+				id: "chatcmpl_tools",
+				model: "k3",
+				choices: [
+					{
+						index: 0,
+						delta: {
+							tool_calls: [
+								{
+									index: 2,
+									id: "call_",
+									function: { name: "pa", arguments: '{"in' },
+								},
+								{
+									index: 0,
+									id: "call_read",
+									function: { name: "re", arguments: '{"path"' },
+								},
+							],
+						},
+						finish_reason: null,
+					},
+				],
+			},
+			{
+				choices: [
+					{
+						index: 0,
+						delta: {
+							tool_calls: [
+								{
+									index: 1,
+									id: "call_spawn",
+									function: { name: "agents.", arguments: '{"task":' },
+								},
+								{
+									index: 0,
+									function: { name: "ad", arguments: ':"a"}' },
+								},
+							],
+						},
+						finish_reason: null,
+					},
+				],
+			},
+			{
+				choices: [
+					{
+						index: 0,
+						delta: {
+							tool_calls: [
+								{
+									index: 2,
+									id: "patch",
+									function: { name: "tch", arguments: 'put":"diff"}' },
+								},
+								{
+									index: 1,
+									function: { name: "spawn", arguments: '"test"}' },
+								},
+							],
+						},
+						finish_reason: "tool_calls",
+						usage: {
+							prompt_tokens: 9,
+							completion_tokens: 4,
+							total_tokens: 13,
+						},
+					},
+				],
+			},
+		];
+		const response = await transformKimiChatResponseToOpenAIResponses(
+			new Response(kimiSse(...chunks, "[DONE]"), {
+				headers: { "content-type": "text/event-stream" },
+			}),
+			{
+				model: "kimi/k3",
+				stream: true,
+				tools: [
+					{ type: "function", name: "read", parameters: {} },
+					{
+						type: "namespace",
+						name: "agents.",
+						tools: [{ type: "function", name: "spawn", parameters: {} }],
+					},
+					{ type: "custom", name: "patch" },
+				],
+			},
+		);
+		const events = parseResponseEvents(await response.text());
+		const terminal = events.at(-1) as {
+			type: string;
+			response: { output: JsonRecord[]; usage: JsonRecord };
+		};
+		expect(terminal.type).toBe("response.completed");
+		expect(terminal.response.output).toEqual([
+			expect.objectContaining({
+				type: "function_call",
+				call_id: "call_read",
+				name: "read",
+				arguments: '{"path":"a"}',
+			}),
+			expect.objectContaining({
+				type: "function_call",
+				call_id: "call_spawn",
+				name: "spawn",
+				namespace: "agents.",
+				arguments: '{"task":"test"}',
+			}),
+			expect.objectContaining({
+				type: "custom_tool_call",
+				call_id: "call_patch",
+				name: "patch",
+				input: "diff",
+			}),
+		]);
+		expect(terminal.response.usage).toEqual({
+			input_tokens: 9,
+			output_tokens: 4,
+			total_tokens: 13,
+		});
+		const added = events.filter(
+			(event) => event.type === "response.output_item.added",
+		);
+		expect(added.map((event) => event.output_index)).toEqual([0, 1, 2]);
+	});
+
+	it.each([
+		["done", "stop", true, "response.completed"],
+		["eof", "stop", false, "response.completed"],
+		["length", "length", true, "response.incomplete"],
+	] as const)("handles %s terminal streams", async (_name, finishReason, includeDone, expectedType) => {
+		const payloads: Array<JsonRecord | "[DONE]"> = [
+			{
+				id: "chatcmpl_terminal",
+				model: "k3",
+				choices: [
+					{
+						index: 0,
+						delta: {},
+						finish_reason: finishReason,
+					},
+				],
+			},
+		];
+		if (includeDone) payloads.push("[DONE]");
+		const response = await transformKimiChatResponseToOpenAIResponses(
+			new Response(kimiSse(...payloads), {
+				headers: { "content-type": "text/event-stream" },
+			}),
+			{ model: "kimi/k3", stream: true },
+		);
+		const events = parseResponseEvents(await response.text());
+		expect(events.at(-1)?.type).toBe(expectedType);
+	});
+
+	it.each([
+		["malformed JSON", "data: {bad json\n\n"],
+		[
+			"unterminated EOF",
+			kimiSse({
+				id: "chatcmpl_partial",
+				choices: [{ index: 0, delta: { content: "partial" } }],
+			}),
+		],
+		[
+			"trailing truncated frame after a finish",
+			`${kimiSse({
+				id: "chatcmpl_trailing",
+				choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+			})}data: {"truncated"`,
+		],
+		["premature done", kimiSse("[DONE]")],
+	] as const)("fails %s streams", async (_name, body) => {
+		const response = await transformKimiChatResponseToOpenAIResponses(
+			new Response(body, {
+				headers: { "content-type": "text/event-stream" },
+			}),
+			{ model: "kimi/k3", stream: true },
+		);
+		const events = parseResponseEvents(await response.text());
+		expect(events.at(-1)?.type).toBe("response.failed");
+		expect(events.some((event) => event.type === "response.completed")).toBe(
+			false,
+		);
+	});
+
+	it.each([
+		[
+			"arguments",
+			{ id: "call_bad", function: { name: "read", arguments: { path: "a" } } },
+			"Kimi tool-call arguments fragment must be a string",
+		],
+		[
+			"name",
+			{ id: "call_bad", function: { name: false, arguments: "{}" } },
+			"Kimi tool-call name fragment must be a string",
+		],
+		[
+			"id",
+			{ id: 42, function: { name: "read", arguments: "{}" } },
+			"Kimi tool-call id fragment must be a string",
+		],
+	] as const)("fails closed for a non-string tool-call %s fragment", async (_field, malformedTool, expectedMessage) => {
+		const response = await transformKimiChatResponseToOpenAIResponses(
+			new Response(
+				kimiSse(
+					{
+						id: "chatcmpl_malformed_tool",
+						choices: [
+							{
+								index: 0,
+								delta: {
+									tool_calls: [{ index: 0, ...malformedTool }],
+								},
+								finish_reason: null,
+							},
+						],
+					},
+					{
+						choices: [
+							{
+								index: 0,
+								delta: {},
+								finish_reason: "tool_calls",
+							},
+						],
+					},
+					"[DONE]",
+				),
+				{ headers: { "content-type": "text/event-stream" } },
+			),
+			{ model: "kimi/k3", stream: true },
+		);
+		const events = parseResponseEvents(await response.text());
+		expect(events.at(-1)).toEqual(
+			expect.objectContaining({
+				type: "response.failed",
+				response: expect.objectContaining({
+					error: expect.objectContaining({ message: expectedMessage }),
+				}),
+			}),
+		);
+		expect(events.some((event) => event.type === "response.completed")).toBe(
+			false,
+		);
+	});
+
+	it("accepts an omitted tool argument fragment before later string arguments", async () => {
+		const response = await transformKimiChatResponseToOpenAIResponses(
+			new Response(
+				kimiSse(
+					{
+						choices: [
+							{
+								index: 0,
+								delta: {
+									tool_calls: [
+										{
+											index: 0,
+											id: "call_read",
+											function: { name: "read" },
+										},
+									],
+								},
+								finish_reason: null,
+							},
+						],
+					},
+					{
+						choices: [
+							{
+								index: 0,
+								delta: {
+									tool_calls: [
+										{
+											index: 0,
+											function: { arguments: '{"path":"a"}' },
+										},
+									],
+								},
+								finish_reason: "tool_calls",
+							},
+						],
+					},
+					"[DONE]",
+				),
+				{ headers: { "content-type": "text/event-stream" } },
+			),
+			{ model: "kimi/k3", stream: true },
+		);
+		const events = parseResponseEvents(await response.text());
+		const terminal = events.at(-1) as {
+			type: string;
+			response: { output: JsonRecord[] };
+		};
+		expect(terminal.type).toBe("response.completed");
+		expect(terminal.response.output).toEqual([
+			expect.objectContaining({
+				call_id: "call_read",
+				name: "read",
+				arguments: '{"path":"a"}',
+			}),
+		]);
+	});
+
+	it("fails a stream that exceeds the bounded tool-call count", async () => {
+		const toolCalls = Array.from({ length: 129 }, (_, index) => ({
+			index,
+			id: `call_${index}`,
+			function: { name: "read", arguments: "{}" },
+		}));
+		const response = await transformKimiChatResponseToOpenAIResponses(
+			new Response(
+				kimiSse({
+					choices: [
+						{ index: 0, delta: { tool_calls: toolCalls }, finish_reason: null },
+					],
+				}),
+				{ headers: { "content-type": "text/event-stream" } },
+			),
+			{ model: "kimi/k3", stream: true },
+		);
+		const events = parseResponseEvents(await response.text());
+		expect(events.at(-1)).toEqual(
+			expect.objectContaining({
+				type: "response.failed",
+				response: expect.objectContaining({
+					error: expect.objectContaining({
+						message: "Kimi stream exceeded 128 tool calls",
+					}),
+				}),
 			}),
 		);
 	});
