@@ -111,7 +111,11 @@ async function releaseFollowUpAfterInitialEvent(
 	expectedInitialEvent: string,
 ): Promise<void> {
 	const causality = activeStreamingCausality;
-	if (!causality || causality.expectedInitialEvent !== expectedInitialEvent) {
+	if (!causality) {
+		return;
+	}
+
+	if (causality.expectedInitialEvent !== expectedInitialEvent) {
 		throw new Error(
 			`Expected an active stream waiting for ${expectedInitialEvent}`,
 		);
@@ -237,6 +241,37 @@ async function runStreamingCurl(
 		);
 	}
 }
+
+describe("Streaming causality gate", () => {
+	it("ignores unrelated streams without a gate while rejecting mismatched gates", async () => {
+		const causality = createStreamingCausality("event: response.created");
+		activeStreamingCausality = causality;
+
+		try {
+			await expect(
+				releaseFollowUpAfterInitialEvent("event: message_start"),
+			).rejects.toThrow(
+				"Expected an active stream waiting for event: message_start",
+			);
+			expect(causality.followUpReleasedAfterInitialEvent).toBe(false);
+
+			causality.initialEventObserved();
+			await releaseFollowUpAfterInitialEvent("event: response.created");
+			expect(causality.followUpReleasedAfterInitialEvent).toBe(true);
+
+			activeStreamingCausality = null;
+			const missingCausality = createStreamingCausality(
+				"event: response.created",
+			);
+			await releaseFollowUpAfterInitialEvent("event: response.created");
+			expect(missingCausality.followUpReleasedAfterInitialEvent).toBe(false);
+		} finally {
+			if (activeStreamingCausality === causality) {
+				activeStreamingCausality = null;
+			}
+		}
+	});
+});
 
 async function waitFor<T>(
 	getValue: () => Promise<T>,
