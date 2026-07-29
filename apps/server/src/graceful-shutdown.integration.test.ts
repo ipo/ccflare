@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
+import { join } from "node:path";
 
-const REPO_ROOT = "/Users/brain/Coding/snipeship/ccflare";
+const REPO_ROOT = join(import.meta.dir, "../../..");
 
 describe("graceful shutdown integration", () => {
 	it("awaits programmatic stop until pending request writes are flushed", async () => {
@@ -140,7 +141,7 @@ describe("graceful shutdown integration", () => {
 			}
 		`;
 
-		const subprocess = Bun.spawn(["bun", "-e", script], {
+		const subprocess = Bun.spawn([process.execPath, "-e", script], {
 			cwd: REPO_ROOT,
 			stdout: "pipe",
 			stderr: "pipe",
