@@ -8,6 +8,7 @@ import {
 	renderConversationToResponsesInput,
 } from "../request-conversation";
 import { applyOpenAIThinkingToAnthropic } from "../request-thinking";
+import { projectResponsesTools } from "../responses-tool-projection";
 import {
 	applyOpenAIChatStructuredOutputs,
 	mapOpenAIChatToolChoiceToResponses,
@@ -260,28 +261,12 @@ export function convertOpenAIResponsesRequestToAnthropic(
 		output.system = rendered.system;
 	}
 
-	if (Array.isArray(input.tools)) {
-		output.tools = input.tools
-			.map((tool) => {
-				if (!isRecord(tool)) return null;
-				if (tool.type && tool.type !== "function") {
-					return null;
-				}
-				return {
-					name: typeof tool.name === "string" ? tool.name : "tool",
-					description:
-						typeof tool.description === "string" ? tool.description : "",
-					input_schema: isRecord(tool.parameters) ? tool.parameters : {},
-				};
-			})
-			.filter(Boolean);
+	const toolProjection = projectResponsesTools(input);
+	if (toolProjection.tools.length > 0) {
+		output.tools = toolProjection.tools;
 	}
-
-	if (input.tool_choice != null) {
-		const mapped = mapOpenAIToolChoiceToAnthropic(input.tool_choice);
-		if (mapped) {
-			output.tool_choice = mapped;
-		}
+	if (toolProjection.toolChoice) {
+		output.tool_choice = toolProjection.toolChoice;
 	}
 
 	return output;

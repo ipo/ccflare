@@ -175,7 +175,12 @@ export function normalizeOpenAIResponsesConversation(
 				: typeof item.role === "string"
 					? "message"
 					: "";
+		if (itemType === "additional_tools") {
+			continue;
+		}
 		if (itemType === "function_call") {
+			const namespace =
+				typeof item.namespace === "string" ? item.namespace : "";
 			messages.push({
 				role: "assistant",
 				content: [],
@@ -185,7 +190,7 @@ export function normalizeOpenAIResponsesConversation(
 							typeof item.call_id === "string" && item.call_id
 								? item.call_id
 								: generateId("call"),
-						name: typeof item.name === "string" ? item.name : "tool",
+						name: `${namespace}${typeof item.name === "string" ? item.name : "tool"}`,
 						arguments:
 							typeof item.arguments === "string"
 								? item.arguments
@@ -196,7 +201,32 @@ export function normalizeOpenAIResponsesConversation(
 			});
 			continue;
 		}
-		if (itemType === "function_call_output") {
+		if (itemType === "custom_tool_call") {
+			const namespace =
+				typeof item.namespace === "string" ? item.namespace : "";
+			messages.push({
+				role: "assistant",
+				content: [],
+				toolCalls: [
+					{
+						id:
+							typeof item.call_id === "string" && item.call_id
+								? item.call_id
+								: generateId("call"),
+						name: `${namespace}${typeof item.name === "string" ? item.name : "tool"}`,
+						arguments: JSON.stringify({
+							input: typeof item.input === "string" ? item.input : "",
+						}),
+					},
+				],
+				forceEmptyContent: true,
+			});
+			continue;
+		}
+		if (
+			itemType === "function_call_output" ||
+			itemType === "custom_tool_call_output"
+		) {
 			messages.push({
 				role: "tool",
 				toolCallId:

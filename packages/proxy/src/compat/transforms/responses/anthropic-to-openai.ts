@@ -14,6 +14,10 @@ import {
 	formatAnthropicCompatNotice,
 } from "../response-content";
 import {
+	projectResponsesTools,
+	type ResponsesToolIdentity,
+} from "../responses-tool-projection";
+import {
 	anthropicStopToOpenAIFinish,
 	buildChatChunk,
 	buildSseFrame,
@@ -76,12 +80,22 @@ async function transformAnthropicResponse(
 			messageTexts: new Map(),
 			functionCallIds: new Map(),
 			functionNames: new Map(),
+			functionNamespaces: new Map(),
+			functionTypes: new Map(),
 			functionArguments: new Map(),
 			reasoningIds: new Map(),
 			reasoningTexts: new Map(),
 		};
+		const reverseByWireName = originalRequest
+			? projectResponsesTools(originalRequest).reverseByWireName
+			: new Map<string, ResponsesToolIdentity>();
 		return createTransformedSseResponse(response, (frame) =>
-			transformAnthropicFrameToOpenAIResponses(frame, state, originalRequest),
+			transformAnthropicFrameToOpenAIResponses(
+				frame,
+				state,
+				originalRequest,
+				reverseByWireName,
+			),
 		);
 	}
 
@@ -138,7 +152,10 @@ function convertAnthropicJsonToOpenAIResponses(
 					: Math.floor(Date.now() / 1000),
 			model: typeof body.model === "string" ? body.model : "unknown",
 			status: "completed",
-			output: convertAnthropicContentToOpenAIResponsesOutput(body.content),
+			output: convertAnthropicContentToOpenAIResponsesOutput(
+				body.content,
+				originalRequest,
+			),
 			usage: toOpenAIUsage(
 				isRecord(body.usage) ? (body.usage as AnthropicUsage) : undefined,
 			),
@@ -363,6 +380,7 @@ function transformAnthropicFrameToOpenAIResponses(
 	frame: SseFrame,
 	state: AnthropicToResponsesStreamState,
 	originalRequest?: JsonRecord,
+	reverseByWireName: ReadonlyMap<string, ResponsesToolIdentity> = new Map(),
 ): string[] {
 	const payload = maybeParseJson(frame.data);
 	if (!isRecord(payload)) return [];
@@ -464,25 +482,39 @@ function transformAnthropicFrameToOpenAIResponses(
 				typeof payload.content_block.id === "string"
 					? payload.content_block.id
 					: generateId("call");
-			const name =
+			const wireName =
 				typeof payload.content_block.name === "string"
 					? payload.content_block.name
 					: "tool";
+			const identity = reverseByWireName.get(wireName) ?? {
+				kind: "function" as const,
+				name: wireName,
+			};
 			state.functionCallIds.set(outputIndex, callId);
-			state.functionNames.set(outputIndex, name);
+			state.functionNames.set(outputIndex, identity.name);
+			if (identity.namespace) {
+				state.functionNamespaces.set(outputIndex, identity.namespace);
+			}
+			state.functionTypes.set(
+				outputIndex,
+				identity.kind === "custom" ? "custom_tool_call" : "function_call",
+			);
 			state.functionArguments.set(outputIndex, "");
+			const itemType =
+				identity.kind === "custom" ? "custom_tool_call" : "function_call";
 			outputs.push(
 				buildSseFrame("response.output_item.added", {
 					type: "response.output_item.added",
 					sequence_number: nextSequence(),
 					output_index: outputIndex,
 					item: {
-						id: `fc_${callId}`,
-						type: "function_call",
+						id: `${identity.kind === "custom" ? "ctc" : "fc"}_${callId}`,
+						type: itemType,
 						status: "in_progress",
 						call_id: callId,
-						name,
-						arguments: "",
+						name: identity.name,
+						...(identity.namespace ? { namespace: identity.namespace } : {}),
+						...(identity.kind === "custom" ? { input: "" } : { arguments: "" }),
 					},
 				}),
 			);
@@ -540,15 +572,17 @@ function transformAnthropicFrameToOpenAIResponses(
 				(state.functionArguments.get(outputIndex) ?? "") +
 					payload.delta.partial_json,
 			);
-			outputs.push(
-				buildSseFrame("response.function_call_arguments.delta", {
-					type: "response.function_call_arguments.delta",
-					sequence_number: nextSequence(),
-					output_index: outputIndex,
-					item_id: `fc_${callId}`,
-					delta: payload.delta.partial_json,
-				}),
-			);
+			if (state.functionTypes.get(outputIndex) !== "custom_tool_call") {
+				outputs.push(
+					buildSseFrame("response.function_call_arguments.delta", {
+						type: "response.function_call_arguments.delta",
+						sequence_number: nextSequence(),
+						output_index: outputIndex,
+						item_id: `fc_${callId}`,
+						delta: payload.delta.partial_json,
+					}),
+				);
+			}
 		}
 		if (
 			payload.delta.type === "thinking_delta" &&
@@ -581,6 +615,44 @@ function transformAnthropicFrameToOpenAIResponses(
 		const reasoningId = state.reasoningIds.get(outputIndex);
 		if (callId) {
 			const argumentsText = state.functionArguments.get(outputIndex) ?? "";
+			const name = state.functionNames.get(outputIndex) ?? "tool";
+			const namespace = state.functionNamespaces.get(outputIndex);
+			if (state.functionTypes.get(outputIndex) === "custom_tool_call") {
+				const parsedInput = maybeParseJson(argumentsText);
+				const input =
+					isRecord(parsedInput) && typeof parsedInput.input === "string"
+						? parsedInput.input
+						: "";
+				if (input) {
+					outputs.push(
+						buildSseFrame("response.custom_tool_call_input.delta", {
+							type: "response.custom_tool_call_input.delta",
+							sequence_number: nextSequence(),
+							output_index: outputIndex,
+							item_id: `ctc_${callId}`,
+							call_id: callId,
+							delta: input,
+						}),
+					);
+				}
+				outputs.push(
+					buildSseFrame("response.output_item.done", {
+						type: "response.output_item.done",
+						sequence_number: nextSequence(),
+						output_index: outputIndex,
+						item: {
+							id: `ctc_${callId}`,
+							type: "custom_tool_call",
+							status: "completed",
+							call_id: callId,
+							name,
+							...(namespace ? { namespace } : {}),
+							input,
+						},
+					}),
+				);
+				return outputs;
+			}
 			outputs.push(
 				buildSseFrame("response.function_call_arguments.done", {
 					type: "response.function_call_arguments.done",
@@ -600,7 +672,8 @@ function transformAnthropicFrameToOpenAIResponses(
 						type: "function_call",
 						status: "completed",
 						call_id: callId,
-						name: state.functionNames.get(outputIndex) ?? "tool",
+						name,
+						...(namespace ? { namespace } : {}),
 						arguments: argumentsText,
 					},
 				}),

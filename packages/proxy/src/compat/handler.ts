@@ -36,6 +36,7 @@ import {
 	transformOpenAIResponsesResponseToAnthropic,
 	transformOpenAIResponsesResponseToOpenAIChat,
 } from "./transforms/responses";
+import { ResponsesToolProjectionError } from "./transforms/responses-tool-projection";
 import type { CompatibilityRouteKind } from "./types";
 
 const log = new Logger("CompatibilityProxy");
@@ -422,17 +423,25 @@ export async function handleCompatibilityProxy(
 		),
 	});
 	for (const actualProvider of COMPAT_PROVIDER_ORDER[model.family]) {
-		const response = await tryProviderFamily({
-			req,
-			url,
-			requestMeta,
-			requestBodyBuffer,
-			requestBodyJson,
-			ctx,
-			actualProvider,
-			route: route.kind,
-			stripped: model,
-		});
+		let response: Response | null;
+		try {
+			response = await tryProviderFamily({
+				req,
+				url,
+				requestMeta,
+				requestBodyBuffer,
+				requestBodyJson,
+				ctx,
+				actualProvider,
+				route: route.kind,
+				stripped: model,
+			});
+		} catch (error) {
+			if (error instanceof ResponsesToolProjectionError) {
+				return buildCompatibilityError(400, error.message);
+			}
+			throw error;
+		}
 		if (response) {
 			return response;
 		}

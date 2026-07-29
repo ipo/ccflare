@@ -104,6 +104,120 @@ describe("handleCompatibilityProxy", () => {
 		expect(response.status).toBe(503);
 	});
 
+	it("returns an actionable 400 for unsupported hosted Responses tools", async () => {
+		const response = await handleCompatibilityProxy(
+			new Request("http://localhost:8080/v1/ccflare/openai/responses", {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({
+					model: "anthropic/claude-sonnet-5",
+					input: "hello",
+					tools: [{ type: "web_search_preview" }],
+				}),
+			}),
+			new URL("http://localhost:8080/v1/ccflare/openai/responses"),
+			createProxyContext({}),
+		);
+
+		if (!response) throw new Error("Expected a response");
+		expect(response.status).toBe(400);
+		expect(await response.json()).toEqual({
+			error:
+				"Unsupported Responses hosted tool type 'web_search_preview' for Anthropic compatibility; remove it or use a function, namespace, or custom tool",
+		});
+	});
+
+	it("returns an actionable 400 for projected tool wire-name collisions", async () => {
+		const response = await handleCompatibilityProxy(
+			new Request("http://localhost:8080/v1/ccflare/openai/responses", {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({
+					model: "anthropic/claude-sonnet-5",
+					input: "hello",
+					tools: [
+						{ type: "function", name: "agents.spawn", parameters: {} },
+						{
+							type: "namespace",
+							name: "agents.",
+							tools: [{ type: "function", name: "spawn", parameters: {} }],
+						},
+					],
+				}),
+			}),
+			new URL("http://localhost:8080/v1/ccflare/openai/responses"),
+			createProxyContext({}),
+		);
+
+		if (!response) throw new Error("Expected a response");
+		expect(response.status).toBe(400);
+		expect(await response.json()).toEqual({
+			error:
+				"Responses tool wire-name collision for 'agents.spawn'; rename the conflicting ordinary, namespace, or custom tool",
+		});
+	});
+
+	it("forwards Responses tool_choice none without auto-enabling declared tools", async () => {
+		let seenBody: Record<string, unknown> | null = null;
+		globalThis.fetch = Object.assign(
+			async (input: RequestInfo | URL, init?: RequestInit) => {
+				const request = new Request(input, init);
+				seenBody = (await request.json()) as Record<string, unknown>;
+				return new Response(
+					JSON.stringify({
+						id: "msg_none",
+						type: "message",
+						role: "assistant",
+						model: "claude-sonnet-5",
+						content: [{ type: "text", text: "no tools used" }],
+						stop_reason: "end_turn",
+						usage: { input_tokens: 4, output_tokens: 3 },
+					}),
+					{ status: 200, headers: { "content-type": "application/json" } },
+				);
+			},
+			{ preconnect: originalFetch.preconnect },
+		) as typeof fetch;
+
+		const response = await handleCompatibilityProxy(
+			new Request("http://localhost:8080/v1/ccflare/openai/responses", {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({
+					model: "anthropic/claude-sonnet-5",
+					input: "do not use tools",
+					tools: [
+						{
+							type: "function",
+							name: "read",
+							parameters: { type: "object" },
+						},
+					],
+					tool_choice: "none",
+				}),
+			}),
+			new URL("http://localhost:8080/v1/ccflare/openai/responses"),
+			createProxyContext({
+				anthropic: [createApiKeyAccount("anthropic")],
+			}),
+		);
+
+		if (!response) throw new Error("Expected a response");
+		expect(response.status).toBe(200);
+		expect(seenBody).toEqual(
+			expect.objectContaining({
+				tools: [
+					{
+						name: "read",
+						description: "",
+						input_schema: { type: "object" },
+					},
+				],
+				tool_choice: { type: "none" },
+			}),
+		);
+	});
+
 	it("prefers codex ahead of openai for the public openai family", async () => {
 		const seenUrls: string[] = [];
 		globalThis.fetch = Object.assign(

@@ -5,6 +5,7 @@ import {
 	convertAnthropicRequestToOpenAIResponses,
 	convertOpenAIChatRequestToAnthropic,
 	convertOpenAIChatRequestToOpenAIResponses,
+	convertOpenAIResponsesRequestToAnthropic,
 	normalizeCodexResponsesRequest,
 } from "./requests";
 
@@ -365,6 +366,200 @@ describe("compat request transforms", () => {
 
 		expect(output.thinking).toEqual({ type: "adaptive" });
 		expect(output.output_config).toEqual({ effort: "max" });
+	});
+
+	it.each([
+		"claude-fable-5",
+		"claude-opus-5",
+		"claude-opus-4-8",
+		"claude-sonnet-5",
+	])("maps maximum effort to adaptive thinking for %s", (model) => {
+		const output = convertOpenAIResponsesRequestToAnthropic(
+			{
+				input: "hi",
+				reasoning: { effort: "xhigh" },
+			},
+			model,
+		);
+
+		expect(output.thinking).toEqual({ type: "adaptive" });
+		expect(output.output_config).toEqual({ effort: "max" });
+	});
+
+	it("keeps claude haiku 4.5 on legacy budget thinking", () => {
+		const output = convertOpenAIResponsesRequestToAnthropic(
+			{
+				input: "hi",
+				reasoning: { effort: "xhigh" },
+			},
+			"claude-haiku-4-5",
+		);
+
+		expect(output.thinking).toEqual({
+			type: "enabled",
+			budget_tokens: 32768,
+		});
+		expect(output.output_config).toBeUndefined();
+	});
+
+	it("projects responses tools from top-level and additional_tools declarations", () => {
+		const stringSchema = {
+			type: "object",
+			properties: { q: { type: "string" } },
+		};
+		const output = convertOpenAIResponsesRequestToAnthropic(
+			{
+				input: [
+					{
+						type: "additional_tools",
+						role: "developer",
+						tools: [
+							{
+								type: "function",
+								name: "additional_function",
+								description: "Additional ordinary",
+								parameters: stringSchema,
+							},
+							{
+								type: "namespace",
+								name: "agents.",
+								description: "Agent tools",
+								tools: [
+									{
+										type: "function",
+										name: "spawn",
+										description: "Spawn an agent",
+										parameters: { type: "object", required: ["task"] },
+									},
+								],
+							},
+							{
+								type: "custom",
+								name: "additional_patch",
+								description: "Additional patch",
+							},
+						],
+					},
+					{ type: "message", role: "user", content: "fix it" },
+				],
+				tools: [
+					{
+						type: "function",
+						name: "top_function",
+						description: "Top ordinary",
+						parameters: stringSchema,
+					},
+					{
+						type: "namespace",
+						name: "mcp__repo__",
+						tools: [
+							{
+								type: "function",
+								name: "read",
+								description: "Read repo",
+								parameters: { type: "object", required: ["path"] },
+							},
+						],
+					},
+					{
+						type: "custom",
+						name: "apply_patch",
+						description: "Apply patch",
+					},
+				],
+				tool_choice: { type: "function", namespace: "agents.", name: "spawn" },
+			},
+			"claude-sonnet-5",
+		);
+
+		expect(output.tools).toEqual([
+			{
+				name: "top_function",
+				description: "Top ordinary",
+				input_schema: stringSchema,
+			},
+			{
+				name: "mcp__repo__read",
+				description: "Read repo",
+				input_schema: { type: "object", required: ["path"] },
+			},
+			{
+				name: "apply_patch",
+				description: "Apply patch",
+				input_schema: {
+					type: "object",
+					properties: { input: { type: "string" } },
+					required: ["input"],
+					additionalProperties: false,
+				},
+			},
+			{
+				name: "additional_function",
+				description: "Additional ordinary",
+				input_schema: stringSchema,
+			},
+			{
+				name: "agents.spawn",
+				description: "Spawn an agent",
+				input_schema: { type: "object", required: ["task"] },
+			},
+			{
+				name: "additional_patch",
+				description: "Additional patch",
+				input_schema: {
+					type: "object",
+					properties: { input: { type: "string" } },
+					required: ["input"],
+					additionalProperties: false,
+				},
+			},
+		]);
+		expect(output.tool_choice).toEqual({ type: "tool", name: "agents.spawn" });
+		expect(output.messages).toEqual([
+			{ role: "user", content: [{ type: "text", text: "fix it" }] },
+		]);
+	});
+
+	it("maps custom Responses tool choice through the projected wire name", () => {
+		const output = convertOpenAIResponsesRequestToAnthropic(
+			{
+				input: "fix it",
+				tools: [{ type: "custom", name: "apply_patch" }],
+				tool_choice: { type: "custom", name: "apply_patch" },
+			},
+			"claude-sonnet-5",
+		);
+
+		expect(output.tool_choice).toEqual({
+			type: "tool",
+			name: "apply_patch",
+		});
+	});
+
+	it("preserves Responses tool_choice none while tools remain declared", () => {
+		const output = convertOpenAIResponsesRequestToAnthropic(
+			{
+				input: "do not use tools",
+				tools: [
+					{
+						type: "function",
+						name: "read",
+						parameters: { type: "object" },
+					},
+				],
+				tool_choice: "none",
+			},
+			"claude-sonnet-5",
+		);
+
+		expect(output.tools).toEqual([
+			{
+				name: "read",
+				description: "",
+				input_schema: { type: "object" },
+			},
+		]);
+		expect(output.tool_choice).toEqual({ type: "none" });
 	});
 
 	it("raises anthropic max_tokens when converted thinking budgets would be invalid", () => {

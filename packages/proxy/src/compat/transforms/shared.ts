@@ -40,6 +40,9 @@ export function textContentFromUnknown(value: unknown): string {
 const ANTHROPIC_46_MODEL_RE = /claude-.*(?:4[-._]?6)/i;
 const ANTHROPIC_OPUS_46_MODEL_RE =
 	/claude-opus-.*(?:4[-._]?6)|claude-opus(?:[-._]?4[-._]?6)/i;
+const ANTHROPIC_ADAPTIVE_5_MODEL_RE =
+	/claude-(?:fable|opus|sonnet)[-._]?5(?:\b|[-._])/i;
+const ANTHROPIC_OPUS_48_MODEL_RE = /claude-opus[-._]?4[-._]?8(?:\b|[-._])/i;
 
 const LEVEL_TO_BUDGET: Record<string, number> = {
 	none: 0,
@@ -82,11 +85,19 @@ export function convertBudgetToReasoningEffort(
 }
 
 export function claudeModelSupportsAdaptive(model: string): boolean {
-	return ANTHROPIC_46_MODEL_RE.test(model);
+	return (
+		ANTHROPIC_46_MODEL_RE.test(model) ||
+		ANTHROPIC_ADAPTIVE_5_MODEL_RE.test(model) ||
+		ANTHROPIC_OPUS_48_MODEL_RE.test(model)
+	);
 }
 
 export function claudeModelSupportsMax(model: string): boolean {
-	return ANTHROPIC_OPUS_46_MODEL_RE.test(model);
+	return (
+		ANTHROPIC_OPUS_46_MODEL_RE.test(model) ||
+		ANTHROPIC_ADAPTIVE_5_MODEL_RE.test(model) ||
+		ANTHROPIC_OPUS_48_MODEL_RE.test(model)
+	);
 }
 
 export function mapToClaudeEffort(
