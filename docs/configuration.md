@@ -222,6 +222,12 @@ The provider always uses the Responses API. Claudeflare receives the canonical
 model ID and selects and translates the upstream OpenAI, Anthropic, or Kimi
 family from that ID; alias resolution is not proxy routing.
 
+The overlay explicitly assigns each picker model a
+`history_compatibility_group`, which controls inherited-history eligibility.
+Only Kimi entries set `requires_nonempty_assistant_messages`; Codex filters
+empty assistant messages only while projecting requests to Kimi. Cross-family
+collaboration messages remain plaintext.
+
 ### High Throughput Setup
 
 Optimized for maximum request throughput with minimal overhead:

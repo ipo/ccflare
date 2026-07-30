@@ -3,21 +3,25 @@
     {
       "slug": "gpt-5.6-sol",
       "aliases": ["5.6-sol", "openai/gpt-5.6-sol"],
+      "history_compatibility_group": "openai",
       "multi_agent_version": "v2"
     },
     {
       "slug": "gpt-5.6-terra",
       "aliases": ["5.6-terra", "openai/gpt-5.6-terra"],
+      "history_compatibility_group": "openai",
       "multi_agent_version": "v2"
     },
     {
       "slug": "gpt-5.6-luna",
       "aliases": ["5.6-luna", "openai/gpt-5.6-luna"],
+      "history_compatibility_group": "openai",
       "multi_agent_version": "v2"
     },
     {
       "slug": "gpt-5.5",
       "aliases": ["5.5", "openai/gpt-5.5"],
+      "history_compatibility_group": "openai",
       "multi_agent_version": "v2"
     },
     {
@@ -25,12 +29,14 @@
       "visibility": "list",
       "max_context_window": 272000,
       "aliases": ["5.4", "openai/gpt-5.4"],
+      "history_compatibility_group": "openai",
       "multi_agent_version": "v2"
     },
     {
       "slug": "gpt-5.4-mini",
       "visibility": "list",
       "aliases": ["5.4-mini", "openai/gpt-5.4-mini"],
+      "history_compatibility_group": "openai",
       "multi_agent_version": "v2"
     },
     {
@@ -58,6 +64,7 @@
       "max_context_window": 128000,
       "input_modalities": ["text"],
       "aliases": ["5.3-spark", "openai/gpt-5.3-codex-spark"],
+      "history_compatibility_group": "openai",
       "multi_agent_version": "v2"
     },
     {
@@ -88,6 +95,7 @@
       "use_responses_lite": true,
       "tool_mode": "direct",
       "aliases": ["fable-5"],
+      "history_compatibility_group": "anthropic",
       "multi_agent_version": "v2"
     },
     {
@@ -119,6 +127,7 @@
       "use_responses_lite": true,
       "tool_mode": "direct",
       "aliases": ["opus-5"],
+      "history_compatibility_group": "anthropic",
       "multi_agent_version": "v2"
     },
     {
@@ -150,6 +159,7 @@
       "use_responses_lite": true,
       "tool_mode": "direct",
       "aliases": ["opus-4.8"],
+      "history_compatibility_group": "anthropic",
       "multi_agent_version": "v2"
     },
     {
@@ -181,6 +191,7 @@
       "use_responses_lite": true,
       "tool_mode": "direct",
       "aliases": ["sonnet-5"],
+      "history_compatibility_group": "anthropic",
       "multi_agent_version": "v2"
     },
     {
@@ -212,6 +223,7 @@
       "use_responses_lite": true,
       "tool_mode": "direct",
       "aliases": ["haiku-4.5"],
+      "history_compatibility_group": "anthropic",
       "multi_agent_version": "v2"
     },
     {
@@ -240,6 +252,8 @@
       "use_responses_lite": true,
       "tool_mode": "direct",
       "aliases": ["k3"],
+      "history_compatibility_group": "kimi",
+      "requires_nonempty_assistant_messages": true,
       "multi_agent_version": "v2"
     },
     {
@@ -268,6 +282,8 @@
       "use_responses_lite": true,
       "tool_mode": "direct",
       "aliases": ["k3-256k"],
+      "history_compatibility_group": "kimi",
+      "requires_nonempty_assistant_messages": true,
       "multi_agent_version": "v2"
     },
     {
@@ -295,6 +311,8 @@
       "use_responses_lite": true,
       "tool_mode": "direct",
       "aliases": ["kimi-2.7", "kimi-for-coding"],
+      "history_compatibility_group": "kimi",
+      "requires_nonempty_assistant_messages": true,
       "multi_agent_version": "v2"
     },
     {
@@ -322,6 +340,8 @@
       "use_responses_lite": true,
       "tool_mode": "direct",
       "aliases": ["kimi-2.7-fast", "kimi-for-coding-highspeed"],
+      "history_compatibility_group": "kimi",
+      "requires_nonempty_assistant_messages": true,
       "multi_agent_version": "v2"
     }
   ]

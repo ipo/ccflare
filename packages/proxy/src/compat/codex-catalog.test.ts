@@ -12,6 +12,8 @@ type CatalogEntry = {
 	input_modalities?: string[];
 	default_reasoning_level?: string;
 	supported_reasoning_levels?: Array<{ effort: string }>;
+	history_compatibility_group?: "openai" | "anthropic" | "kimi";
+	requires_nonempty_assistant_messages?: boolean;
 	[key: string]: unknown;
 };
 
@@ -50,6 +52,14 @@ const expectedPickerModels = [
 	...anthropicModels,
 	...kimiModels,
 ];
+const expectedHistoryCompatibilityGroups: Record<
+	string,
+	NonNullable<CatalogEntry["history_compatibility_group"]>
+> = {
+	...Object.fromEntries(openaiModels.map((slug) => [slug, "openai"])),
+	...Object.fromEntries(anthropicModels.map((slug) => [slug, "anthropic"])),
+	...Object.fromEntries(kimiModels.map((slug) => [slug, "kimi"])),
+};
 const expectedAliases: Record<string, string[]> = {
 	"gpt-5.6-sol": ["5.6-sol", "openai/gpt-5.6-sol"],
 	"gpt-5.6-terra": ["5.6-terra", "openai/gpt-5.6-terra"],
@@ -197,6 +207,39 @@ describe("Codex catalog overlay", () => {
 			expect(entry(slug)).toMatchObject({ visibility: "none" });
 			expect(entry(slug)).not.toHaveProperty("multi_agent_version");
 		}
+	});
+
+	it("defines explicit history compatibility groups for the complete picker", () => {
+		const declaredGroups = Object.fromEntries(
+			overlay.models
+				.filter(
+					({ history_compatibility_group }) => history_compatibility_group,
+				)
+				.map(({ slug, history_compatibility_group }) => [
+					slug,
+					history_compatibility_group,
+				]),
+		);
+
+		expect(declaredGroups).toEqual(expectedHistoryCompatibilityGroups);
+	});
+
+	it("requires nonempty assistant messages for Kimi models only", () => {
+		const declaredFlags = Object.fromEntries(
+			overlay.models
+				.filter(
+					({ requires_nonempty_assistant_messages }) =>
+						requires_nonempty_assistant_messages !== undefined,
+				)
+				.map(({ slug, requires_nonempty_assistant_messages }) => [
+					slug,
+					requires_nonempty_assistant_messages,
+				]),
+		);
+
+		expect(declaredFlags).toEqual(
+			Object.fromEntries(kimiModels.map((slug) => [slug, true])),
+		);
 	});
 
 	it("retains canonical model slugs while routing every family through one provider", () => {

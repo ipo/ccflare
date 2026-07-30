@@ -292,6 +292,12 @@ each canonical model, with the preferred `spawn_agent` selector first. Codex
 resolves those aliases to canonical IDs before requests reach Claudeflare, so
 the proxy's model-family routing remains canonical-ID based.
 
+Each picker entry explicitly declares its `history_compatibility_group`, which
+governs eligibility for inherited history. Kimi entries also set
+`requires_nonempty_assistant_messages`, so Codex removes empty assistant
+messages only when projecting a request to Kimi. Cross-family collaboration
+messages remain plaintext.
+
 ### Anthropic
 
 - upstream base URL defaults to `https://api.anthropic.com`
