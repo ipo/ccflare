@@ -4,6 +4,8 @@ import { extractRequestLinkageFromPayload } from "@ccflare/types";
 import { addPerformanceIndexes } from "./performance-indexes";
 
 const log = new Logger("DatabaseMigrations");
+const REQUEST_LINKAGE_MIGRATION_ID = "request_linkage_backfill_v1";
+const REQUEST_LINKAGE_BATCH_SIZE = 100;
 
 interface TableInfoRow {
 	cid: number;
@@ -114,49 +116,73 @@ function ensureRequestLinkageColumns(db: Database): void {
 	}
 }
 
-function backfillRequestLinkageColumns(db: Database): void {
-	const missingCount = db
-		.query(
-			`
-				SELECT COUNT(*) AS count
-				FROM requests
-				WHERE response_chain_id IS NULL OR client_session_id IS NULL
-			`,
+function ensureSchemaMigrationsTable(db: Database): void {
+	db.run(`
+		CREATE TABLE IF NOT EXISTS schema_migrations (
+			id TEXT PRIMARY KEY,
+			applied_at INTEGER NOT NULL
 		)
-		.get() as { count: number } | null;
+	`);
+}
 
-	if (!missingCount || missingCount.count === 0) {
+function isMigrationApplied(db: Database, id: string): boolean {
+	return (
+		db.query("SELECT 1 FROM schema_migrations WHERE id = ? LIMIT 1").get(id) !==
+		null
+	);
+}
+
+function markMigrationApplied(db: Database, id: string): void {
+	db.run(
+		"INSERT OR IGNORE INTO schema_migrations (id, applied_at) VALUES (?, ?)",
+		[id, Date.now()],
+	);
+}
+
+function backfillRequestLinkageColumns(db: Database): void {
+	if (isMigrationApplied(db, REQUEST_LINKAGE_MIGRATION_ID)) {
+		return;
+	}
+	const hasMissingResponseChain =
+		db
+			.query("SELECT 1 FROM requests WHERE response_chain_id IS NULL LIMIT 1")
+			.get() !== null;
+	if (!hasMissingResponseChain) {
+		markMigrationApplied(db, REQUEST_LINKAGE_MIGRATION_ID);
 		return;
 	}
 
-	const rows = db
-		.query(
-			`
-				SELECT
-					r.id,
-					r.timestamp,
-					r.response_id,
-					r.previous_response_id,
-					r.response_chain_id,
-					r.client_session_id,
-					rp.json
-				FROM requests r
-				LEFT JOIN request_payloads rp ON rp.id = r.id
-				ORDER BY r.timestamp ASC
-			`,
-		)
-		.all() as Array<{
-		id: string;
-		timestamp: number;
-		response_id: string | null;
-		previous_response_id: string | null;
-		response_chain_id: string | null;
-		client_session_id: string | null;
-		json: string | null;
-	}>;
-
-	const responseToChain = new Map<string, string>();
-	let updatedRows = 0;
+	const selectRows = db.query<
+		{
+			id: string;
+			timestamp: number;
+			response_id: string | null;
+			previous_response_id: string | null;
+			client_session_id: string | null;
+		},
+		[number]
+	>(`
+		SELECT
+			id,
+			timestamp,
+			response_id,
+			previous_response_id,
+			client_session_id
+		FROM requests
+		WHERE response_chain_id IS NULL
+		ORDER BY timestamp ASC, id ASC
+		LIMIT ?
+	`);
+	const selectPayload = db.query<{ json: string }, [string]>(
+		"SELECT json FROM request_payloads WHERE id = ?",
+	);
+	const selectParentChain = db.query<{ response_chain_id: string }, [string]>(`
+		SELECT response_chain_id
+		FROM requests
+		WHERE response_id = ? AND response_chain_id IS NOT NULL
+		ORDER BY timestamp ASC, id ASC
+		LIMIT 1
+	`);
 
 	const updateStmt = db.prepare(`
 		UPDATE requests
@@ -168,45 +194,37 @@ function backfillRequestLinkageColumns(db: Database): void {
 		WHERE id = ?
 	`);
 
-	db.run("BEGIN");
-	try {
-		for (const row of rows) {
-			let payload: unknown = null;
-			if (typeof row.json === "string") {
-				try {
-					payload = JSON.parse(row.json);
-				} catch {
-					payload = null;
+	let updatedRows = 0;
+	while (true) {
+		const rows = selectRows.all(REQUEST_LINKAGE_BATCH_SIZE);
+		if (rows.length === 0) {
+			break;
+		}
+
+		db.run("BEGIN");
+		try {
+			for (const row of rows) {
+				let payload: unknown = null;
+				const payloadRow = selectPayload.get(row.id);
+				if (payloadRow) {
+					try {
+						payload = JSON.parse(payloadRow.json);
+					} catch {
+						payload = null;
+					}
 				}
-			}
 
-			const extracted = extractRequestLinkageFromPayload(payload);
-			const previousResponseId =
-				extracted.previousResponseId ?? row.previous_response_id ?? null;
-			const responseId = extracted.responseId ?? row.response_id ?? null;
-			let responseChainId = row.response_chain_id;
-			const clientSessionId =
-				extracted.clientSessionId ?? row.client_session_id ?? null;
+				const extracted = extractRequestLinkageFromPayload(payload);
+				const previousResponseId =
+					extracted.previousResponseId ?? row.previous_response_id ?? null;
+				const responseId = extracted.responseId ?? row.response_id ?? null;
+				const clientSessionId =
+					extracted.clientSessionId ?? row.client_session_id ?? null;
+				const responseChainId = previousResponseId
+					? (selectParentChain.get(previousResponseId)?.response_chain_id ??
+						previousResponseId)
+					: (responseId ?? row.id);
 
-			if (!responseChainId) {
-				if (previousResponseId) {
-					responseChainId =
-						responseToChain.get(previousResponseId) ?? previousResponseId;
-				} else {
-					responseChainId = responseId ?? row.id;
-				}
-			}
-
-			if (responseId && responseChainId) {
-				responseToChain.set(responseId, responseChainId);
-			}
-
-			if (
-				row.previous_response_id !== previousResponseId ||
-				row.response_id !== responseId ||
-				row.response_chain_id !== responseChainId ||
-				row.client_session_id !== clientSessionId
-			) {
 				updateStmt.run(
 					previousResponseId,
 					responseId,
@@ -216,12 +234,14 @@ function backfillRequestLinkageColumns(db: Database): void {
 				);
 				updatedRows++;
 			}
+			db.run("COMMIT");
+		} catch (e) {
+			db.run("ROLLBACK");
+			throw e;
 		}
-		db.run("COMMIT");
-	} catch (e) {
-		db.run("ROLLBACK");
-		throw e;
 	}
+
+	markMigrationApplied(db, REQUEST_LINKAGE_MIGRATION_ID);
 
 	if (updatedRows > 0) {
 		log.info(`Backfilled request linkage for ${updatedRows} requests`);
@@ -656,6 +676,7 @@ function rebuildLegacyTables(
 export function runMigrations(db: Database): void {
 	// Ensure base schema exists first
 	ensureSchema(db);
+	ensureSchemaMigrationsTable(db);
 
 	const accountsInfo = getTableInfo(db, "accounts");
 	const requestsInfo = getTableInfo(db, "requests");

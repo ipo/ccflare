@@ -2,30 +2,35 @@
   "models": [
     {
       "slug": "gpt-5.6-sol",
+      "use_responses_lite": true,
       "aliases": ["5.6-sol", "openai/gpt-5.6-sol"],
       "history_compatibility_group": "openai",
       "multi_agent_version": "v2"
     },
     {
       "slug": "gpt-5.6-terra",
+      "use_responses_lite": true,
       "aliases": ["5.6-terra", "openai/gpt-5.6-terra"],
       "history_compatibility_group": "openai",
       "multi_agent_version": "v2"
     },
     {
       "slug": "gpt-5.6-luna",
+      "use_responses_lite": true,
       "aliases": ["5.6-luna", "openai/gpt-5.6-luna"],
       "history_compatibility_group": "openai",
       "multi_agent_version": "v2"
     },
     {
       "slug": "gpt-5.5",
+      "use_responses_lite": false,
       "aliases": ["5.5", "openai/gpt-5.5"],
       "history_compatibility_group": "openai",
       "multi_agent_version": "v2"
     },
     {
       "slug": "gpt-5.4",
+      "use_responses_lite": false,
       "visibility": "list",
       "max_context_window": 272000,
       "aliases": ["5.4", "openai/gpt-5.4"],
@@ -34,6 +39,7 @@
     },
     {
       "slug": "gpt-5.4-mini",
+      "use_responses_lite": false,
       "visibility": "list",
       "aliases": ["5.4-mini", "openai/gpt-5.4-mini"],
       "history_compatibility_group": "openai",
@@ -41,14 +47,17 @@
     },
     {
       "slug": "gpt-5.2",
+      "use_responses_lite": false,
       "visibility": "none"
     },
     {
       "slug": "codex-auto-review",
+      "use_responses_lite": false,
       "visibility": "none"
     },
     {
       "slug": "gpt-5.3-codex-spark",
+      "use_responses_lite": true,
       "inherits": "gpt-5.6-sol",
       "display_name": "GPT-5.3 Codex Spark",
       "description": "Fast Codex model for focused coding tasks.",

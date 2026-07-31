@@ -5,7 +5,6 @@ export function normalizeCodexResponsesRequest(input: JsonRecord): JsonRecord {
 	const output: JsonRecord = { ...input };
 	output.stream = true;
 	output.store = false;
-	output.parallel_tool_calls = true;
 	output.include = ["reasoning.encrypted_content"];
 
 	if (

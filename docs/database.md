@@ -226,6 +226,11 @@ It:
 3. ensures the current `auth_sessions` table exists
 4. drops tables/columns that are not part of the current runtime model
 
+Completed data migrations are recorded in `schema_migrations`; nullable
+application columns are not used as completion markers. Historical data work is
+performed in bounded, restart-safe batches so startup never materializes the
+full payload history in memory.
+
 The authoritative source of truth is:
 
 - `packages/database/src/migrations.ts`

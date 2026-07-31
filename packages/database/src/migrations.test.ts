@@ -581,7 +581,8 @@ describe("database schema", () => {
 			const rows = db
 				.query(
 					`
-						SELECT id, response_id, previous_response_id, response_chain_id
+						SELECT id, response_id, previous_response_id, response_chain_id,
+							client_session_id
 						FROM requests
 						ORDER BY timestamp ASC
 					`,
@@ -591,6 +592,7 @@ describe("database schema", () => {
 				response_id: string | null;
 				previous_response_id: string | null;
 				response_chain_id: string | null;
+				client_session_id: string | null;
 			}>;
 
 			expect(rows).toEqual([
@@ -599,14 +601,97 @@ describe("database schema", () => {
 					response_id: "resp-root",
 					previous_response_id: null,
 					response_chain_id: "resp-root",
+					client_session_id: null,
 				},
 				{
 					id: "request-child",
 					response_id: "resp-child",
 					previous_response_id: "resp-root",
 					response_chain_id: "resp-root",
+					client_session_id: null,
 				},
 			]);
+			expect(
+				db
+					.query(
+						"SELECT id FROM schema_migrations WHERE id = 'request_linkage_backfill_v1'",
+					)
+					.get(),
+			).toEqual({ id: "request_linkage_backfill_v1" });
+
+			// Nullable client session IDs are valid application data, not evidence
+			// that this migration remains pending.
+			runMigrations(db);
+			expect(
+				db
+					.query(
+						"SELECT COUNT(*) AS count FROM schema_migrations WHERE id = 'request_linkage_backfill_v1'",
+					)
+					.get(),
+			).toEqual({ count: 1 });
+		} finally {
+			db.close();
+		}
+	});
+
+	it("commits request linkage backfills in resumable bounded batches", () => {
+		const db = new Database(":memory:");
+
+		try {
+			ensureSchema(db);
+			for (let index = 0; index <= 100; index++) {
+				const id = `request-${index.toString().padStart(3, "0")}`;
+				db.run(
+					`INSERT INTO requests (
+						id, timestamp, method, path, provider, upstream_path
+					) VALUES (?, ?, ?, ?, ?, ?)`,
+					[id, index, "POST", "/v1/openai/responses", "openai", "/responses"],
+				);
+			}
+			db.run(`
+				CREATE TRIGGER fail_second_request_linkage_batch
+				BEFORE UPDATE OF response_chain_id ON requests
+				WHEN OLD.id = 'request-100'
+				BEGIN
+					SELECT RAISE(ABORT, 'stop after first request linkage batch');
+				END
+			`);
+
+			expect(() => runMigrations(db)).toThrow(
+				"stop after first request linkage batch",
+			);
+			expect(
+				db
+					.query(
+						"SELECT COUNT(*) AS count FROM requests WHERE response_chain_id IS NOT NULL",
+					)
+					.get(),
+			).toEqual({ count: 100 });
+			expect(
+				db
+					.query(
+						"SELECT COUNT(*) AS count FROM schema_migrations WHERE id = 'request_linkage_backfill_v1'",
+					)
+					.get(),
+			).toEqual({ count: 0 });
+
+			db.run("DROP TRIGGER fail_second_request_linkage_batch");
+			runMigrations(db);
+
+			expect(
+				db
+					.query(
+						"SELECT COUNT(*) AS count FROM requests WHERE response_chain_id IS NOT NULL",
+					)
+					.get(),
+			).toEqual({ count: 101 });
+			expect(
+				db
+					.query(
+						"SELECT COUNT(*) AS count FROM schema_migrations WHERE id = 'request_linkage_backfill_v1'",
+					)
+					.get(),
+			).toEqual({ count: 1 });
 		} finally {
 			db.close();
 		}

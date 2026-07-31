@@ -218,9 +218,12 @@ published by the overlay, including `opus-5`, `5.6-sol`, and `kimi-2.7`, and
 resolves them to canonical IDs before making a request. The first alias listed
 for each model is Codex's preferred `spawn_agent` selector.
 
-The provider always uses the Responses API. Claudeflare receives the canonical
-model ID and selects and translates the upstream OpenAI, Anthropic, or Kimi
-family from that ID; alias resolution is not proxy routing.
+The provider always uses the Responses API. Codex reads each catalog entry's
+`use_responses_lite` mode at startup and selects the corresponding transport.
+Claudeflare receives the resulting request, preserves its
+`parallel_tool_calls` value unchanged, and selects and translates the upstream
+OpenAI, Anthropic, or Kimi family from the canonical model ID; alias resolution
+is not proxy routing.
 
 The overlay explicitly assigns each picker model a
 `history_compatibility_group`, which controls inherited-history eligibility.

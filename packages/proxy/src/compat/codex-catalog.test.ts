@@ -60,6 +60,19 @@ const expectedHistoryCompatibilityGroups: Record<
 	...Object.fromEntries(anthropicModels.map((slug) => [slug, "anthropic"])),
 	...Object.fromEntries(kimiModels.map((slug) => [slug, "kimi"])),
 };
+const expectedResponsesLiteModes: Record<string, boolean> = {
+	"gpt-5.6-sol": true,
+	"gpt-5.6-terra": true,
+	"gpt-5.6-luna": true,
+	"gpt-5.5": false,
+	"gpt-5.4": false,
+	"gpt-5.4-mini": false,
+	"gpt-5.2": false,
+	"codex-auto-review": false,
+	"gpt-5.3-codex-spark": true,
+	...Object.fromEntries(anthropicModels.map((slug) => [slug, true])),
+	...Object.fromEntries(kimiModels.map((slug) => [slug, true])),
+};
 const expectedAliases: Record<string, string[]> = {
 	"gpt-5.6-sol": ["5.6-sol", "openai/gpt-5.6-sol"],
 	"gpt-5.6-terra": ["5.6-terra", "openai/gpt-5.6-terra"],
@@ -222,6 +235,17 @@ describe("Codex catalog overlay", () => {
 		);
 
 		expect(declaredGroups).toEqual(expectedHistoryCompatibilityGroups);
+	});
+
+	it("declares the Responses Lite mode for every catalog entry", () => {
+		const declaredModes = Object.fromEntries(
+			overlay.models.map(({ slug, use_responses_lite }) => [
+				slug,
+				use_responses_lite,
+			]),
+		);
+
+		expect(declaredModes).toEqual(expectedResponsesLiteModes);
 	});
 
 	it("requires nonempty assistant messages for Kimi models only", () => {

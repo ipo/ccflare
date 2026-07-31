@@ -606,12 +606,16 @@ describe("handleCompatibilityProxy", () => {
 		expect(json.tool_choice).toBe("auto");
 	});
 
-	it("normalizes codex-backed openai responses requests before forwarding", async () => {
+	it("preserves Lite parallel tool calls while normalizing Codex responses", async () => {
 		let seenBody: Record<string, unknown> | null = null;
+		let seenResponsesLiteHeader: string | null = null;
 		globalThis.fetch = Object.assign(
 			async (input: RequestInfo | URL, init?: RequestInit) => {
 				const request = new Request(input, init);
 				seenBody = (await request.json()) as Record<string, unknown>;
+				seenResponsesLiteHeader = request.headers.get(
+					"x-openai-internal-codex-responses-lite",
+				);
 				return new Response(
 					JSON.stringify({
 						id: "resp_test",
@@ -638,9 +642,13 @@ describe("handleCompatibilityProxy", () => {
 		const response = await handleCompatibilityProxy(
 			new Request("http://localhost:8080/v1/ccflare/openai/responses", {
 				method: "POST",
-				headers: { "content-type": "application/json" },
+				headers: {
+					"content-type": "application/json",
+					"x-openai-internal-codex-responses-lite": "true",
+				},
 				body: JSON.stringify({
 					model: "openai/gpt-5.4",
+					parallel_tool_calls: false,
 					input: [{ type: "message", role: "system", content: [] }],
 					temperature: 0.2,
 					top_p: 0.7,
@@ -665,7 +673,8 @@ describe("handleCompatibilityProxy", () => {
 
 		expect(forwarded.stream).toBe(true);
 		expect(forwarded.store).toBe(false);
-		expect(forwarded.parallel_tool_calls).toBe(true);
+		expect(forwarded.parallel_tool_calls).toBe(false);
+		expect(seenResponsesLiteHeader as string | null).toBe("true");
 		expect(forwarded.include).toEqual(["reasoning.encrypted_content"]);
 		expect(forwarded.truncation).toBeUndefined();
 		expect(forwarded.user).toBeUndefined();

@@ -634,7 +634,7 @@ describe("compat request transforms", () => {
 
 		expect(output.stream).toBe(true);
 		expect(output.store).toBe(false);
-		expect(output.parallel_tool_calls).toBe(true);
+		expect(output).not.toHaveProperty("parallel_tool_calls");
 		expect(output.include).toEqual(["reasoning.encrypted_content"]);
 		expect(output.reasoning).toEqual({ effort: "medium", summary: "auto" });
 		expect(output.temperature).toBeUndefined();
@@ -647,6 +647,23 @@ describe("compat request transforms", () => {
 		expect(output.input).toEqual([
 			{ type: "message", role: "developer", content: [] },
 		]);
+	});
+
+	it("preserves the client parallel_tool_calls setting for Codex", () => {
+		for (const parallelToolCalls of [false, true, undefined]) {
+			const output = normalizeCodexResponsesRequest({
+				model: "gpt-5.6-sol",
+				...(parallelToolCalls === undefined
+					? {}
+					: { parallel_tool_calls: parallelToolCalls }),
+			});
+
+			if (parallelToolCalls === undefined) {
+				expect(output).not.toHaveProperty("parallel_tool_calls");
+			} else {
+				expect(output.parallel_tool_calls).toBe(parallelToolCalls);
+			}
+		}
 	});
 
 	it("converts Responses conversations and Kimi request controls", () => {
