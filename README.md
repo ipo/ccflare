@@ -213,7 +213,7 @@ Key endpoints:
 - `POST /api/accounts/:id/pause` / `resume` — exclude or restore an account
 - `POST /api/accounts/:id/rename` — rename an account
 - `GET /api/requests` — recent request summaries
-- `GET /api/requests/detail` — detailed request info with payloads
+- `GET /api/requests/:id/detail` — detailed request payload for one exact request ID
 - `GET /api/requests/:id/conversation` — HTTP conversation JSON or full WebSocket transcript NDJSON export
 - `GET /api/requests/stream` — live request summary stream via SSE
 - `GET /api/requests/:id/transcript` — paged raw WebSocket transcript chunks

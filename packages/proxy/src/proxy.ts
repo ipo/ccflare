@@ -2,7 +2,6 @@ import { requestEvents, ServiceUnavailableError } from "@ccflare/core";
 import { Logger } from "@ccflare/logger";
 import {
 	extractClientSessionIdFromHeaders,
-	isRequestPayload,
 	isRequestSummary,
 } from "@ccflare/types";
 import {
@@ -47,11 +46,6 @@ export function getUsageWorker(): UsageWorkerTransport {
 					requestEvents.emit("event", {
 						type: "summary",
 						payload: data.summary,
-					});
-				} else if (data.type === "payload" && isRequestPayload(data.payload)) {
-					requestEvents.emit("event", {
-						type: "payload",
-						payload: data.payload,
 					});
 				}
 			},

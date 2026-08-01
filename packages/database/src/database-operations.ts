@@ -311,8 +311,8 @@ export class DatabaseOperations implements StrategyStore, Disposable {
 		return this.requests.listPayloadsWithAccountNames(limit);
 	}
 
-	listRequestDetailRows(limit = 50): RequestDetailRow[] {
-		return this.requests.listDetailRows(limit);
+	getRequestDetailRow(requestId: string): RequestDetailRow | null {
+		return this.requests.findDetailRow(requestId);
 	}
 
 	getRequestWithAccountName(requestId: string): RequestWithAccountName | null {

@@ -15,6 +15,7 @@ import { Eye, Maximize2, Minimize2 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { api } from "../api";
 import { queryKeys } from "../lib/query-keys";
+import type { RequestListItem } from "../lib/request-list-model";
 import { getStatusCodeBadgeVariant } from "../lib/request-status";
 import { ConversationView } from "./ConversationView";
 import { CopyButton } from "./CopyButton";
@@ -34,15 +35,13 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
 import { WebSocketTranscriptView } from "./WebSocketTranscriptView";
 
 interface RequestDetailsModalProps {
-	request: RequestPayload;
-	summary: RequestSummary | undefined;
+	item: RequestListItem;
 	isOpen: boolean;
 	onClose: () => void;
 }
 
 export function RequestDetailsModal({
-	request,
-	summary,
+	item,
 	isOpen,
 	onClose,
 }: RequestDetailsModalProps) {
@@ -50,14 +49,24 @@ export function RequestDetailsModal({
 	const [linebreakMode, setLinebreakMode] = useState(false);
 	const [activeTab, setActiveTab] = useState("conversation");
 	const [expanded, setExpanded] = useState(false);
-	const isWebSocket = request.meta.trace.method === "WS";
+	const isWebSocket = item.method === "WS";
+	const summary: RequestSummary | undefined = item.summary ?? undefined;
+	const {
+		data: request,
+		isLoading: detailLoading,
+		error: detailError,
+	} = useQuery<RequestPayload>({
+		queryKey: queryKeys.requestDetail(item.id),
+		queryFn: () => api.getRequestDetail(item.id),
+		enabled: isOpen,
+	});
 	const {
 		data: conversationChain = [],
 		isLoading: conversationLoading,
 		error: conversationError,
 	} = useQuery({
-		queryKey: queryKeys.requestConversation(request.id),
-		queryFn: () => api.getRequestConversation(request.id),
+		queryKey: queryKeys.requestConversation(item.id),
+		queryFn: () => api.getRequestConversation(item.id),
 		enabled: isOpen && !isWebSocket,
 	});
 	const conversationEntries = useMemo(
@@ -77,7 +86,7 @@ export function RequestDetailsModal({
 	const formatBody = (body: string | null) =>
 		formatBodyBase(body, beautifyMode);
 
-	const statusCode = request.response?.status;
+	const statusCode = item.statusCode;
 
 	const handleOpenChange = (open: boolean) => {
 		if (!open) {
@@ -86,8 +95,46 @@ export function RequestDetailsModal({
 		}
 	};
 
+	if (!request) {
+		return (
+			<Dialog open={isOpen} onOpenChange={handleOpenChange}>
+				<DialogContent className="max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
+					<DialogHeader>
+						<DialogTitle className="flex items-center gap-2">
+							<Eye className="h-5 w-5" />
+							Request Details
+						</DialogTitle>
+						<DialogDescription className="flex items-center gap-2 flex-wrap">
+							<span className="font-mono text-sm">
+								{formatTimestamp(item.timestamp)}
+							</span>
+							<span className="font-medium">{item.method}</span>
+							<span className="font-mono">{item.path}</span>
+							{statusCode && (
+								<Badge variant={getStatusCodeBadgeVariant(statusCode)}>
+									{statusCode}
+								</Badge>
+							)}
+						</DialogDescription>
+					</DialogHeader>
+					<div
+						className={`flex items-center justify-center h-32 ${
+							detailError ? "text-destructive" : "text-muted-foreground"
+						}`}
+					>
+						{detailLoading
+							? "Loading request details..."
+							: detailError instanceof Error
+								? detailError.message
+								: "Failed to load request details"}
+					</div>
+				</DialogContent>
+			</Dialog>
+		);
+	}
+
 	const conversationContent = isWebSocket ? (
-		<WebSocketTranscriptView requestId={request.id} />
+		<WebSocketTranscriptView requestId={item.id} />
 	) : conversationLoading ? (
 		<div className="flex items-center justify-center h-32 text-muted-foreground">
 			Loading conversation...
@@ -129,7 +176,7 @@ export function RequestDetailsModal({
 					<DialogDescription className="flex items-center justify-between">
 						<div className="flex items-center gap-2 flex-wrap">
 							<span className="font-mono text-sm">
-								{formatTimestamp(request.meta.trace.timestamp)}
+								{formatTimestamp(item.timestamp)}
 							</span>
 							{statusCode && (
 								<Badge variant={getStatusCodeBadgeVariant(statusCode)}>

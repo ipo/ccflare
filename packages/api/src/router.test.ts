@@ -1336,14 +1336,31 @@ describe("APIRouter", () => {
 		]);
 	});
 
-	it("returns structured request payload metadata sections", async () => {
+	it("keeps multi-megabyte payloads out of summaries and returns only exact detail", async () => {
 		const { router, dbOps } = createRouterContext();
 		const { accountId } = await createApiKeyAccount(router, {
 			name: "payload-owner",
 		});
 
+		const sentinel = `sentinel-${"x".repeat(3 * 1024 * 1024)}`;
+		const payload = {
+			id: "request-payload",
+			request: { headers: { "x-test": "selected" }, body: sentinel },
+			response: { status: 200, headers: {}, body: null },
+			meta: {
+				trace: {
+					timestamp: 123,
+					method: "POST" as const,
+					path: "/v1/anthropic/v1/messages",
+					provider: "anthropic" as const,
+					upstreamPath: "/v1/messages",
+				},
+				account: { id: accountId },
+				transport: { success: true, pending: false, retry: 0 },
+			},
+		};
 		dbOps.saveRequest(
-			"request-payload",
+			payload.id,
 			"POST",
 			"/v1/anthropic/v1/messages",
 			"anthropic",
@@ -1354,37 +1371,52 @@ describe("APIRouter", () => {
 			null,
 			21,
 			0,
+			undefined,
+			{ timestamp: 123, payload },
 		);
-		dbOps.saveRequestPayload("request-payload", {
-			id: "request-payload",
-			request: { headers: {}, body: null },
-			response: { status: 200, headers: {}, body: null },
-			meta: {
-				trace: {
-					timestamp: 123,
-					method: "POST",
-					path: "/v1/anthropic/v1/messages",
-					provider: "anthropic",
-					upstreamPath: "/v1/messages",
-				},
-				account: {
-					id: accountId,
-				},
-				transport: {
-					success: true,
-					pending: false,
-					retry: 0,
+		dbOps.saveRequest(
+			"other-request",
+			"POST",
+			"/v1/anthropic/v1/messages",
+			"anthropic",
+			"/v1/messages",
+			accountId,
+			200,
+			true,
+			null,
+			10,
+			0,
+			undefined,
+			{
+				timestamp: 124,
+				payload: {
+					...payload,
+					id: "other-request",
+					request: { headers: {}, body: "other-body" },
 				},
 			},
-		});
+		);
+
+		const summaryResponse = await apiRequest(
+			router,
+			"GET",
+			"/api/requests?limit=200",
+		);
+		const summaryText = await summaryResponse.text();
+		expect(summaryResponse.status).toBe(200);
+		expect(summaryText).not.toContain("sentinel-");
+		expect(summaryText).not.toContain("other-body");
 
 		const response = await apiRequest(
 			router,
 			"GET",
-			"/api/requests/detail?limit=1",
+			"/api/requests/request-payload/detail",
 		);
 		expect(response.status).toBe(200);
-		expect((await response.json()) as Array<Record<string, unknown>>).toEqual([
+		const detailText = await response.text();
+		expect(detailText).toContain(sentinel);
+		expect(detailText).not.toContain("other-body");
+		expect(JSON.parse(detailText) as Record<string, unknown>).toEqual(
 			expect.objectContaining({
 				id: "request-payload",
 				meta: {
@@ -1406,7 +1438,95 @@ describe("APIRouter", () => {
 					},
 				},
 			}),
-		]);
+		);
+	});
+
+	it("returns metadata detail fallbacks and 404 for unknown or removed bulk routes", async () => {
+		const { router, dbOps } = createRouterContext();
+		dbOps.saveRequestMeta(
+			"pending",
+			"POST",
+			"/pending",
+			"openai",
+			"/pending",
+			null,
+			null,
+			10,
+		);
+		dbOps.saveRequestMeta(
+			"websocket",
+			"WS",
+			"/socket",
+			"openai",
+			"/socket",
+			null,
+			101,
+			11,
+		);
+		dbOps.saveRequestMeta(
+			"missing",
+			"POST",
+			"/missing",
+			"openai",
+			"/missing",
+			null,
+			200,
+			12,
+		);
+		dbOps.saveRequest(
+			"missing",
+			"POST",
+			"/missing",
+			"openai",
+			"/missing",
+			null,
+			200,
+			true,
+			null,
+			5,
+			0,
+		);
+		dbOps.saveRequest(
+			"malformed",
+			"POST",
+			"/bad",
+			"openai",
+			"/bad",
+			null,
+			500,
+			false,
+			"bad response",
+			5,
+			0,
+		);
+		dbOps.saveRequestPayload("malformed", { invalid: true });
+
+		for (const [id, expected] of [
+			["pending", { pending: true, isStream: false }],
+			["websocket", { pending: true, isStream: true }],
+			["missing", { pending: false, isStream: false }],
+			["malformed", { pending: false, isStream: false }],
+		] as const) {
+			const response = await apiRequest(
+				router,
+				"GET",
+				`/api/requests/${id}/detail`,
+			);
+			expect(response.status).toBe(200);
+			expect(await response.json()).toMatchObject({
+				id,
+				request: { headers: {}, body: null },
+				meta: { transport: expected },
+			});
+		}
+
+		expect(
+			(await apiRequest(router, "GET", "/api/requests/unknown/detail")).status,
+		).toBe(404);
+		expect(
+			(await apiRequest(router, "GET", "/api/requests/detail?limit=200"))
+				.status,
+		).toBe(404);
 	});
 
 	it("returns conversation chains by request or client session id", async () => {

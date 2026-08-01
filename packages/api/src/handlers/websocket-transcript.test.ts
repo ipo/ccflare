@@ -37,19 +37,19 @@ describe("WebSocket transcript handlers", () => {
 	});
 
 	it("keeps metadata-only websocket requests visible in request detail", async () => {
-		const response = createRequestsDetailHandler(dbOps)(10);
-		const payloads = (await response.json()) as Array<{
+		const response = createRequestsDetailHandler(dbOps)("ws-handler");
+		const payload = (await response.json()) as {
 			id: string;
 			meta: { transport: { pending?: boolean } };
-		}>;
-		expect(payloads).toEqual([
+		};
+		expect(payload).toEqual(
 			expect.objectContaining({
 				id: "ws-handler",
 				meta: expect.objectContaining({
 					transport: expect.objectContaining({ pending: true }),
 				}),
 			}),
-		]);
+		);
 	});
 
 	function createChunkFromEntries(

@@ -134,9 +134,9 @@ For HTTP proxy traffic:
 
 For streaming HTTP traffic:
 
-- the proxy emits chunk/summary payloads to the worker
+- the proxy emits response chunks and completion metadata to the worker
 - the worker parses provider-specific usage events
-- final summaries and payloads are persisted asynchronously
+- full payloads are persisted asynchronously, while only final summaries return to the main thread and request-summary SSE stream
 
 For WebSocket traffic, the main proxy path writes ordered raw transcript chunks directly. This avoids holding an entire long-lived connection in the HTTP post-processor worker and allows an open request detail view to receive newly persisted chunks live. A separate best-effort analytics extractor aggregates recognized `response.completed` usage onto the connection row; it never changes or gates raw transcript capture.
 

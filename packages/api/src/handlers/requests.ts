@@ -47,60 +47,58 @@ function parsePayloadRows(
 	});
 }
 
-function parseDetailRows(rows: RequestDetailRow[]): RequestPayload[] {
-	return rows.flatMap((row) => {
-		if (!isHttpMethod(row.method) || !isAccountProvider(row.provider)) {
-			return [];
-		}
-		if (row.payload_json) {
-			try {
-				const payload = parseRequestPayload({
-					id: row.id,
-					...JSON.parse(row.payload_json),
-				});
-				if (payload) {
-					return [enrichRequestPayload(payload, row.account_name)];
-				}
-			} catch {
-				log.warn(`Falling back to summary payload for ${row.id}`);
+function parseDetailRow(row: RequestDetailRow): RequestPayload | null {
+	if (!isHttpMethod(row.method) || !isAccountProvider(row.provider)) {
+		return null;
+	}
+	if (row.payload_json) {
+		try {
+			const payload = parseRequestPayload({
+				...JSON.parse(row.payload_json),
+				id: row.id,
+			});
+			if (payload) {
+				return enrichRequestPayload(payload, row.account_name);
 			}
+		} catch {
+			log.warn(`Falling back to summary payload for ${row.id}`);
 		}
+	}
 
-		const payload: RequestPayload = {
-			id: row.id,
-			request: { headers: {}, body: null },
-			response:
-				row.status_code === null
-					? null
-					: { status: row.status_code, headers: {}, body: null },
-			...(row.error_message ? { error: row.error_message } : {}),
-			meta: {
-				trace: {
-					timestamp: row.timestamp,
-					method: row.method,
-					path: row.path,
-					provider: row.provider,
-					upstreamPath: row.upstream_path,
-					responseId: row.response_id,
-					previousResponseId: row.previous_response_id,
-					responseChainId: row.response_chain_id,
-					clientSessionId: row.client_session_id,
-				},
-				account: { id: row.account_used, name: row.account_name },
-				transport: {
-					success: row.success === 1,
-					pending: row.success === null,
-					retry: row.failover_attempts,
-					isStream: row.method === "WS",
-					ttftMs: row.ttft_ms,
-					proxyOverheadMs: row.proxy_overhead_ms,
-					upstreamTtfbMs: row.upstream_ttfb_ms,
-					streamingDurationMs: row.streaming_duration_ms,
-				},
+	const payload: RequestPayload = {
+		id: row.id,
+		request: { headers: {}, body: null },
+		response:
+			row.status_code === null
+				? null
+				: { status: row.status_code, headers: {}, body: null },
+		...(row.error_message ? { error: row.error_message } : {}),
+		meta: {
+			trace: {
+				timestamp: row.timestamp,
+				method: row.method,
+				path: row.path,
+				provider: row.provider,
+				upstreamPath: row.upstream_path,
+				responseId: row.response_id,
+				previousResponseId: row.previous_response_id,
+				responseChainId: row.response_chain_id,
+				clientSessionId: row.client_session_id,
 			},
-		};
-		return [payload];
-	});
+			account: { id: row.account_used, name: row.account_name },
+			transport: {
+				success: row.success === 1,
+				pending: row.success === null,
+				retry: row.failover_attempts,
+				isStream: row.method === "WS",
+				ttftMs: row.ttft_ms,
+				proxyOverheadMs: row.proxy_overhead_ms,
+				upstreamTtfbMs: row.upstream_ttfb_ms,
+				streamingDurationMs: row.streaming_duration_ms,
+			},
+		},
+	};
+	return payload;
 }
 
 /**
@@ -125,9 +123,17 @@ export function createRequestsSummaryHandler(dbOps: DatabaseOperations) {
  * Create a detailed requests handler with full payload data
  */
 export function createRequestsDetailHandler(dbOps: DatabaseOperations) {
-	return (limit = 100): Response => {
+	return (requestId: string): Response => {
 		try {
-			return jsonResponse(parseDetailRows(dbOps.listRequestDetailRows(limit)));
+			const row = dbOps.getRequestDetailRow(requestId);
+			if (!row) {
+				return errorResponse(NotFound("Request detail not found"));
+			}
+			const payload = parseDetailRow(row);
+			if (!payload) {
+				return errorResponse(InternalServerError("Invalid request metadata"));
+			}
+			return jsonResponse(payload);
 		} catch (error) {
 			log.error("Failed to load request details", error);
 			return errorResponse(

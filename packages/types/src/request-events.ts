@@ -2,9 +2,7 @@ import { isFiniteNumber, isRecord } from "./guards";
 import {
 	type HttpMethod,
 	isHttpMethod,
-	isRequestPayload,
 	isRequestSummary,
-	type RequestPayload,
 	type RequestSummary,
 } from "./request";
 
@@ -34,16 +32,10 @@ export interface RequestSummaryEvent {
 	payload: RequestSummary;
 }
 
-export interface RequestPayloadEvent {
-	type: "payload";
-	payload: RequestPayload;
-}
-
 export type RequestStreamEvent =
 	| RequestIngressEvent
 	| RequestStartEvent
-	| RequestSummaryEvent
-	| RequestPayloadEvent;
+	| RequestSummaryEvent;
 
 function isOptionalNullableString(value: unknown): boolean {
 	return value === undefined || value === null || typeof value === "string";
@@ -80,8 +72,6 @@ export function isRequestStreamEvent(
 			);
 		case "summary":
 			return isRequestSummary(value.payload);
-		case "payload":
-			return isRequestPayload(value.payload);
 		default:
 			return false;
 	}

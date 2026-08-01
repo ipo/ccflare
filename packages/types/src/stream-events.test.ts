@@ -179,6 +179,24 @@ describe("stream event validation", () => {
 		});
 	});
 
+	it("rejects the removed full-payload request event", () => {
+		expect(
+			parseRequestStreamEvent({
+				type: "payload",
+				payload: {
+					id: "request-payload",
+					request: { headers: {}, body: "large-body" },
+					response: { status: 200, headers: {}, body: "large-response" },
+					meta: {
+						trace: { timestamp: 1, method: "POST", path: "/v1/test" },
+						account: { id: null },
+						transport: { success: true },
+					},
+				},
+			}),
+		).toBeNull();
+	});
+
 	it("parses validated log stream payloads", () => {
 		expect(parseLogStreamEvent({ connected: true })).toEqual({
 			connected: true,
