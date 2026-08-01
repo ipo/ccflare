@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import {
+	DEFAULT_USAGE_WORKER_ACK_TIMEOUT_MS,
+	DEFAULT_USAGE_WORKER_READY_TIMEOUT_MS,
 	resolveUsageWorkerEntrypoint,
 	UsageWorkerController,
 	type WorkerLike,
@@ -125,6 +127,11 @@ afterEach(async () => {
 });
 
 describe("UsageWorkerController", () => {
+	it("allows 15 seconds for worker readiness and acknowledgements by default", () => {
+		expect(DEFAULT_USAGE_WORKER_READY_TIMEOUT_MS).toBe(15_000);
+		expect(DEFAULT_USAGE_WORKER_ACK_TIMEOUT_MS).toBe(15_000);
+	});
+
 	it("resolves an explicit usage worker path from the environment", () => {
 		process.env.CF_USAGE_WORKER_PATH = "/tmp/post-processor.worker.js";
 

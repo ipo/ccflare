@@ -1,7 +1,6 @@
 import { existsSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { TIME_CONSTANTS } from "@ccflare/core";
 import { isRecord } from "@ccflare/types";
 import type {
 	AckMessage,
@@ -57,13 +56,16 @@ interface PendingAck {
 	timer: ReturnType<typeof setTimeout>;
 }
 
+export const DEFAULT_USAGE_WORKER_READY_TIMEOUT_MS = 15_000;
+export const DEFAULT_USAGE_WORKER_ACK_TIMEOUT_MS = 15_000;
+
 const DEFAULT_READY_TIMEOUT_MS = Number(
 	process.env.CF_USAGE_WORKER_READY_TIMEOUT_MS ||
-		TIME_CONSTANTS.RETRY_DELAY_DEFAULT * 5,
+		DEFAULT_USAGE_WORKER_READY_TIMEOUT_MS,
 );
 const DEFAULT_ACK_TIMEOUT_MS = Number(
 	process.env.CF_USAGE_WORKER_ACK_TIMEOUT_MS ||
-		TIME_CONSTANTS.RETRY_DELAY_DEFAULT * 5,
+		DEFAULT_USAGE_WORKER_ACK_TIMEOUT_MS,
 );
 const DEFAULT_SHUTDOWN_DELAY_MS = 100;
 

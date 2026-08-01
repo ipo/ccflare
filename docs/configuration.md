@@ -119,6 +119,8 @@ These environment variables are not stored in the configuration file and must be
 | `CF_PRICING_REFRESH_HOURS` | Hours between pricing data refreshes | `24` | `CF_PRICING_REFRESH_HOURS=12` |
 | `CF_STREAM_USAGE_BUFFER_KB` | Stream usage buffer size in KB | `64` | `CF_STREAM_USAGE_BUFFER_KB=128` |
 | `CF_STREAM_TIMEOUT_MS` | Stream processing timeout in milliseconds | `60000` (1 minute) | `CF_STREAM_TIMEOUT_MS=120000` |
+| `CF_USAGE_WORKER_READY_TIMEOUT_MS` | Time allowed for the usage worker to become ready before restart | `15000` (15 seconds) | `CF_USAGE_WORKER_READY_TIMEOUT_MS=30000` |
+| `CF_USAGE_WORKER_ACK_TIMEOUT_MS` | Time allowed for the usage worker to acknowledge a message before restart | `15000` (15 seconds) | `CF_USAGE_WORKER_ACK_TIMEOUT_MS=30000` |
 
 ## Runtime Configuration API
 
