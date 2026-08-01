@@ -13,7 +13,7 @@ import type {
 	StrategyStore,
 	WebSocketTranscriptChunk,
 } from "@ccflare/types";
-import { ensureSchema, runMigrations } from "./migrations";
+import { runMigrations } from "./migrations";
 import type { RequestWithAccountName } from "./models/request-row";
 import { resolveDbPath } from "./paths";
 import {
@@ -78,7 +78,6 @@ export class DatabaseOperations implements StrategyStore, Disposable {
 		if (options.initializeSchema !== false) {
 			this.db.exec("PRAGMA journal_mode = WAL"); // Enable Write-Ahead Logging once on the primary connection
 			this.db.exec("PRAGMA synchronous = NORMAL"); // Better performance while maintaining safety
-			ensureSchema(this.db);
 			runMigrations(this.db);
 		}
 

@@ -1,6 +1,27 @@
 import { Database } from "bun:sqlite";
 import { describe, expect, it } from "bun:test";
+import { logBus } from "@ccflare/logger";
 import { ensureSchema, runMigrations } from "./migrations";
+
+function captureMigrationMessages(messages: string[], run: () => void): void {
+	const listener = (event: { msg: string }) => {
+		if (
+			event.msg.startsWith("Applying migration") ||
+			event.msg.startsWith("Completed migration") ||
+			event.msg.startsWith("Failed migration") ||
+			event.msg.startsWith("Skipped migration") ||
+			event.msg.startsWith("Migration summary")
+		) {
+			messages.push(event.msg);
+		}
+	};
+	logBus.on("log", listener);
+	try {
+		run();
+	} finally {
+		logBus.off("log", listener);
+	}
+}
 
 function getTableColumns(db: Database, tableName: string) {
 	return db.query(`PRAGMA table_info(${tableName})`).all() as Array<{
@@ -86,6 +107,92 @@ function encode(value: string): string {
 }
 
 describe("database schema", () => {
+	it("reports existing indexes as skipped instead of claiming they were added", () => {
+		const db = new Database(":memory:");
+		try {
+			runMigrations(db);
+			const messages: string[] = [];
+			captureMigrationMessages(messages, () => runMigrations(db));
+
+			expect(messages).toContain(
+				"Skipped migration index:idx_requests_timestamp_account: create index idx_requests_timestamp_account on requests(timestamp DESC, account_used) (already present)",
+			);
+			expect(messages.some((message) => message.includes("Added index"))).toBe(
+				false,
+			);
+			expect(messages.at(-1)).toMatch(
+				/^Migration summary: 0 applied, \d+ skipped, 0 failed \(\d+ ms total\)$/,
+			);
+		} finally {
+			db.close();
+		}
+	});
+
+	it("logs a missing index before creating it and reports completion afterward", () => {
+		const db = new Database(":memory:");
+		try {
+			runMigrations(db);
+			db.run("DROP INDEX idx_requests_timestamp_account");
+
+			const messages: string[] = [];
+			captureMigrationMessages(messages, () => runMigrations(db));
+			const applyingIndex = messages.findIndex((message) =>
+				message.startsWith(
+					"Applying migration index:idx_requests_timestamp_account:",
+				),
+			);
+			const completedIndex = messages.findIndex((message) =>
+				message.startsWith(
+					"Completed migration index:idx_requests_timestamp_account:",
+				),
+			);
+
+			expect(applyingIndex).toBeGreaterThanOrEqual(0);
+			expect(completedIndex).toBeGreaterThan(applyingIndex);
+			expect(
+				db
+					.query(
+						"SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'idx_requests_timestamp_account'",
+					)
+					.get(),
+			).not.toBeNull();
+		} finally {
+			db.close();
+		}
+	});
+
+	it("identifies a failed index operation and still prints the migration summary", () => {
+		const db = new Database(":memory:");
+		try {
+			runMigrations(db);
+			db.run("DROP INDEX idx_requests_timestamp_account");
+			db.run("CREATE TABLE idx_requests_timestamp_account (id INTEGER)");
+
+			const messages: string[] = [];
+			expect(() =>
+				captureMigrationMessages(messages, () => runMigrations(db)),
+			).toThrow();
+
+			const applyingIndex = messages.findIndex((message) =>
+				message.startsWith(
+					"Applying migration index:idx_requests_timestamp_account:",
+				),
+			);
+			const failedIndex = messages.findIndex((message) =>
+				message.startsWith(
+					"Failed migration index:idx_requests_timestamp_account:",
+				),
+			);
+			expect(applyingIndex).toBeGreaterThanOrEqual(0);
+			expect(failedIndex).toBeGreaterThan(applyingIndex);
+			expect(messages.at(-1)).toMatch(
+				/^Migration summary: \d+ applied, \d+ skipped, 1 failed \(\d+ ms total\)$/,
+			);
+		} finally {
+			db.close();
+		}
+	});
+
 	it("creates the fresh v2 schema for accounts and requests", () => {
 		const db = new Database(":memory:");
 
@@ -271,6 +378,7 @@ describe("database schema", () => {
 
 		try {
 			createV1Schema(db);
+			const migrationMessages: string[] = [];
 
 			db.run(
 				`INSERT INTO accounts (
@@ -325,7 +433,24 @@ describe("database schema", () => {
 				],
 			);
 
-			runMigrations(db);
+			captureMigrationMessages(migrationMessages, () => runMigrations(db));
+			for (const migrationId of [
+				"legacy_accounts_v2:create",
+				"legacy_accounts_v2:copy",
+				"legacy_accounts_v2:swap",
+				"legacy_requests_v2:create",
+				"legacy_requests_v2:copy",
+				"legacy_requests_v2:swap",
+			]) {
+				const applying = migrationMessages.findIndex((message) =>
+					message.startsWith(`Applying migration ${migrationId}:`),
+				);
+				const completed = migrationMessages.findIndex((message) =>
+					message.startsWith(`Completed migration ${migrationId}:`),
+				);
+				expect(applying).toBeGreaterThanOrEqual(0);
+				expect(completed).toBeGreaterThan(applying);
+			}
 
 			const tables = db
 				.query("SELECT name FROM sqlite_master WHERE type = 'table'")
@@ -657,8 +782,25 @@ describe("database schema", () => {
 				END
 			`);
 
-			expect(() => runMigrations(db)).toThrow(
-				"stop after first request linkage batch",
+			const firstRunMessages: string[] = [];
+			expect(() =>
+				captureMigrationMessages(firstRunMessages, () => runMigrations(db)),
+			).toThrow("stop after first request linkage batch");
+			expect(firstRunMessages).toEqual(
+				expect.arrayContaining([
+					expect.stringMatching(
+						/^Applying migration request_linkage_backfill_v1:batch-1: backfill batch 1 \(100 requests\)$/,
+					),
+					expect.stringMatching(
+						/^Completed migration request_linkage_backfill_v1:batch-1:/,
+					),
+					expect.stringMatching(
+						/^Applying migration request_linkage_backfill_v1:batch-2: backfill batch 2 \(1 requests\)$/,
+					),
+					expect.stringMatching(
+						/^Failed migration request_linkage_backfill_v1:batch-2:/,
+					),
+				]),
 			);
 			expect(
 				db

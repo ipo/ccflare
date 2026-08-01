@@ -1,6 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { Logger } from "@ccflare/logger";
 import { extractRequestLinkageFromPayload } from "@ccflare/types";
+import { MigrationProgress } from "./migration-progress";
 import { addPerformanceIndexes } from "./performance-indexes";
 
 const log = new Logger("DatabaseMigrations");
@@ -20,6 +21,64 @@ interface AccountNameRow {
 	id: string;
 	name: string;
 	created_at: number | null;
+}
+
+function schemaObjectExists(
+	db: Database,
+	type: "index" | "table",
+	name: string,
+): boolean {
+	return (
+		db
+			.query("SELECT 1 FROM sqlite_master WHERE type = ? AND name = ? LIMIT 1")
+			.get(type, name) !== null
+	);
+}
+
+function ensureTable(
+	db: Database,
+	progress: MigrationProgress,
+	name: string,
+	sql: string,
+): void {
+	const id = `table:${name}`;
+	const operation = `create table ${name}`;
+	if (schemaObjectExists(db, "table", name)) {
+		progress.skip(id, operation, "already present");
+		return;
+	}
+	progress.apply(id, operation, () => db.run(sql));
+}
+
+function ensureIndex(
+	db: Database,
+	progress: MigrationProgress,
+	name: string,
+	operation: string,
+	sql: string,
+): void {
+	const id = `index:${name}`;
+	if (schemaObjectExists(db, "index", name)) {
+		progress.skip(id, operation, "already present");
+		return;
+	}
+	progress.apply(id, operation, () => db.run(sql));
+}
+
+function dropSchemaObject(
+	db: Database,
+	progress: MigrationProgress,
+	type: "index" | "table",
+	name: string,
+): void {
+	const operation = `drop legacy ${type} ${name}`;
+	if (!schemaObjectExists(db, type, name)) {
+		progress.skip(`legacy:${type}:${name}`, operation, "not present");
+		return;
+	}
+	progress.apply(`legacy:${type}:${name}`, operation, () =>
+		db.run(`DROP ${type.toUpperCase()} ${name}`),
+	);
 }
 
 function getTableInfo(db: Database, tableName: string): TableInfoRow[] {
@@ -96,7 +155,10 @@ function shouldMigrateRequestsTable(columns: TableInfoRow[]): boolean {
 	);
 }
 
-function ensureRequestLinkageColumns(db: Database): void {
+function ensureRequestLinkageColumns(
+	db: Database,
+	progress: MigrationProgress,
+): void {
 	const columns = getTableInfo(db, "requests");
 	const requestColumns = [
 		["response_id", "TEXT"],
@@ -110,19 +172,33 @@ function ensureRequestLinkageColumns(db: Database): void {
 	] as const;
 
 	for (const [columnName, columnType] of requestColumns) {
-		if (!hasColumn(columns, columnName)) {
-			db.run(`ALTER TABLE requests ADD COLUMN ${columnName} ${columnType}`);
+		const id = `column:requests.${columnName}`;
+		const operation = `add column requests.${columnName} ${columnType}`;
+		if (hasColumn(columns, columnName)) {
+			progress.skip(id, operation, "already present");
+			continue;
 		}
+		progress.apply(id, operation, () =>
+			db.run(`ALTER TABLE requests ADD COLUMN ${columnName} ${columnType}`),
+		);
 	}
 }
 
-function ensureSchemaMigrationsTable(db: Database): void {
-	db.run(`
+function ensureSchemaMigrationsTable(
+	db: Database,
+	progress: MigrationProgress,
+): void {
+	ensureTable(
+		db,
+		progress,
+		"schema_migrations",
+		`
 		CREATE TABLE IF NOT EXISTS schema_migrations (
 			id TEXT PRIMARY KEY,
 			applied_at INTEGER NOT NULL
 		)
-	`);
+	`,
+	);
 }
 
 function isMigrationApplied(db: Database, id: string): boolean {
@@ -139,16 +215,32 @@ function markMigrationApplied(db: Database, id: string): void {
 	);
 }
 
-function backfillRequestLinkageColumns(db: Database): void {
+function backfillRequestLinkageColumns(
+	db: Database,
+	progress: MigrationProgress,
+): void {
 	if (isMigrationApplied(db, REQUEST_LINKAGE_MIGRATION_ID)) {
+		progress.skip(
+			REQUEST_LINKAGE_MIGRATION_ID,
+			"backfill historical request linkage",
+			"already recorded",
+		);
 		return;
 	}
-	const hasMissingResponseChain =
-		db
-			.query("SELECT 1 FROM requests WHERE response_chain_id IS NULL LIMIT 1")
-			.get() !== null;
+	const hasMissingResponseChain = progress.apply(
+		`${REQUEST_LINKAGE_MIGRATION_ID}:inspect`,
+		"inspect requests missing response-chain linkage",
+		() =>
+			db
+				.query("SELECT 1 FROM requests WHERE response_chain_id IS NULL LIMIT 1")
+				.get() !== null,
+	);
 	if (!hasMissingResponseChain) {
-		markMigrationApplied(db, REQUEST_LINKAGE_MIGRATION_ID);
+		progress.apply(
+			`${REQUEST_LINKAGE_MIGRATION_ID}:record`,
+			"record completed migration with no rows requiring backfill",
+			() => markMigrationApplied(db, REQUEST_LINKAGE_MIGRATION_ID),
+		);
 		return;
 	}
 
@@ -195,60 +287,80 @@ function backfillRequestLinkageColumns(db: Database): void {
 	`);
 
 	let updatedRows = 0;
+	let batchNumber = 0;
 	while (true) {
-		const rows = selectRows.all(REQUEST_LINKAGE_BATCH_SIZE);
+		const rows = progress.apply(
+			`${REQUEST_LINKAGE_MIGRATION_ID}:select-batch-${batchNumber + 1}`,
+			`select up to ${REQUEST_LINKAGE_BATCH_SIZE} requests for backfill batch ${batchNumber + 1}`,
+			() => selectRows.all(REQUEST_LINKAGE_BATCH_SIZE),
+		);
 		if (rows.length === 0) {
 			break;
 		}
+		batchNumber += 1;
 
-		db.run("BEGIN");
-		try {
-			for (const row of rows) {
-				let payload: unknown = null;
-				const payloadRow = selectPayload.get(row.id);
-				if (payloadRow) {
-					try {
-						payload = JSON.parse(payloadRow.json);
-					} catch {
-						payload = null;
+		progress.apply(
+			`${REQUEST_LINKAGE_MIGRATION_ID}:batch-${batchNumber}`,
+			`backfill batch ${batchNumber} (${rows.length} requests)`,
+			() => {
+				db.run("BEGIN");
+				try {
+					for (const row of rows) {
+						let payload: unknown = null;
+						const payloadRow = selectPayload.get(row.id);
+						if (payloadRow) {
+							try {
+								payload = JSON.parse(payloadRow.json);
+							} catch {
+								payload = null;
+							}
+						}
+
+						const extracted = extractRequestLinkageFromPayload(payload);
+						const previousResponseId =
+							extracted.previousResponseId ?? row.previous_response_id ?? null;
+						const responseId = extracted.responseId ?? row.response_id ?? null;
+						const clientSessionId =
+							extracted.clientSessionId ?? row.client_session_id ?? null;
+						const responseChainId = previousResponseId
+							? (selectParentChain.get(previousResponseId)?.response_chain_id ??
+								previousResponseId)
+							: (responseId ?? row.id);
+
+						updateStmt.run(
+							previousResponseId,
+							responseId,
+							responseChainId,
+							clientSessionId,
+							row.id,
+						);
+						updatedRows++;
 					}
+					db.run("COMMIT");
+				} catch (error) {
+					db.run("ROLLBACK");
+					throw error;
 				}
-
-				const extracted = extractRequestLinkageFromPayload(payload);
-				const previousResponseId =
-					extracted.previousResponseId ?? row.previous_response_id ?? null;
-				const responseId = extracted.responseId ?? row.response_id ?? null;
-				const clientSessionId =
-					extracted.clientSessionId ?? row.client_session_id ?? null;
-				const responseChainId = previousResponseId
-					? (selectParentChain.get(previousResponseId)?.response_chain_id ??
-						previousResponseId)
-					: (responseId ?? row.id);
-
-				updateStmt.run(
-					previousResponseId,
-					responseId,
-					responseChainId,
-					clientSessionId,
-					row.id,
-				);
-				updatedRows++;
-			}
-			db.run("COMMIT");
-		} catch (e) {
-			db.run("ROLLBACK");
-			throw e;
-		}
+			},
+		);
 	}
 
-	markMigrationApplied(db, REQUEST_LINKAGE_MIGRATION_ID);
+	progress.apply(
+		`${REQUEST_LINKAGE_MIGRATION_ID}:record`,
+		`record completed backfill (${updatedRows} requests across ${batchNumber} batches)`,
+		() => markMigrationApplied(db, REQUEST_LINKAGE_MIGRATION_ID),
+	);
 
 	if (updatedRows > 0) {
 		log.info(`Backfilled request linkage for ${updatedRows} requests`);
 	}
 }
 
-function migrateAccountsTable(db: Database, columns: TableInfoRow[]): void {
+function migrateAccountsTable(
+	db: Database,
+	columns: TableInfoRow[],
+	progress: MigrationProgress,
+): void {
 	const weightExpression = hasColumn(columns, "weight")
 		? hasColumn(columns, "account_tier")
 			? "COALESCE(weight, account_tier, 1)"
@@ -257,7 +369,11 @@ function migrateAccountsTable(db: Database, columns: TableInfoRow[]): void {
 			? "COALESCE(account_tier, 1)"
 			: "1";
 
-	db.run(`
+	progress.apply(
+		"legacy_accounts_v2:create",
+		"create replacement table accounts_v2",
+		() =>
+			db.run(`
 		CREATE TABLE accounts_v2 (
 			id TEXT PRIMARY KEY,
 			name TEXT NOT NULL,
@@ -281,10 +397,15 @@ function migrateAccountsTable(db: Database, columns: TableInfoRow[]): void {
 			rate_limit_status TEXT,
 			rate_limit_remaining INTEGER
 		)
-	`);
+	`),
+	);
 
-	db.run(
-		`
+	progress.apply(
+		"legacy_accounts_v2:copy",
+		"copy legacy account rows into accounts_v2",
+		() =>
+			db.run(
+				`
 		INSERT INTO accounts_v2 (
 			id, name, provider, auth_method, base_url, api_key, refresh_token,
 			access_token, expires_at, created_at, last_used, request_count,
@@ -316,15 +437,29 @@ function migrateAccountsTable(db: Database, columns: TableInfoRow[]): void {
 			${columnOr(columns, "rate_limit_remaining", "NULL")}
 		FROM accounts
 	`,
+			),
 	);
 
-	db.run("DROP TABLE accounts");
-	db.run("ALTER TABLE accounts_v2 RENAME TO accounts");
-	log.info("Migrated accounts table to v2 schema");
+	progress.apply("legacy_accounts_v2:drop", "drop legacy accounts table", () =>
+		db.run("DROP TABLE accounts"),
+	);
+	progress.apply(
+		"legacy_accounts_v2:swap",
+		"rename accounts_v2 to accounts",
+		() => db.run("ALTER TABLE accounts_v2 RENAME TO accounts"),
+	);
 }
 
-function migrateRequestsTable(db: Database, columns: TableInfoRow[]): void {
-	db.run(`
+function migrateRequestsTable(
+	db: Database,
+	columns: TableInfoRow[],
+	progress: MigrationProgress,
+): void {
+	progress.apply(
+		"legacy_requests_v2:create",
+		"create replacement table requests_v2",
+		() =>
+			db.run(`
 		CREATE TABLE requests_v2 (
 			id TEXT PRIMARY KEY,
 			timestamp INTEGER NOT NULL,
@@ -358,10 +493,15 @@ function migrateRequestsTable(db: Database, columns: TableInfoRow[]): void {
 			upstream_ttfb_ms INTEGER,
 			streaming_duration_ms INTEGER
 		)
-	`);
+	`),
+	);
 
-	db.run(
-		`
+	progress.apply(
+		"legacy_requests_v2:copy",
+		"copy legacy request rows into requests_v2",
+		() =>
+			db.run(
+				`
 		INSERT INTO requests_v2 (
 			id, timestamp, method, path, provider, upstream_path, account_used,
 			status_code, success, error_message, response_time_ms,
@@ -406,15 +546,28 @@ function migrateRequestsTable(db: Database, columns: TableInfoRow[]): void {
 			${columnOr(columns, "streaming_duration_ms", "NULL")}
 		FROM requests
 	`,
+			),
 	);
 
-	db.run("DROP TABLE requests");
-	db.run("ALTER TABLE requests_v2 RENAME TO requests");
-	log.info("Migrated requests table to v2 schema");
+	progress.apply("legacy_requests_v2:drop", "drop legacy requests table", () =>
+		db.run("DROP TABLE requests"),
+	);
+	progress.apply(
+		"legacy_requests_v2:swap",
+		"rename requests_v2 to requests",
+		() => db.run("ALTER TABLE requests_v2 RENAME TO requests"),
+	);
 }
 
-function ensureAuthSessionsTable(db: Database): void {
-	db.run(`
+function ensureAuthSessionsTable(
+	db: Database,
+	progress: MigrationProgress,
+): void {
+	ensureTable(
+		db,
+		progress,
+		"auth_sessions",
+		`
 		CREATE TABLE IF NOT EXISTS auth_sessions (
 			id TEXT PRIMARY KEY,
 			provider TEXT NOT NULL,
@@ -424,9 +577,14 @@ function ensureAuthSessionsTable(db: Database): void {
 			created_at TEXT NOT NULL,
 			expires_at TEXT NOT NULL
 		)
-	`);
+	`,
+	);
 
-	db.run(
+	ensureIndex(
+		db,
+		progress,
+		"idx_auth_sessions_expires",
+		"create index idx_auth_sessions_expires on auth_sessions(expires_at)",
 		`CREATE INDEX IF NOT EXISTS idx_auth_sessions_expires ON auth_sessions(expires_at)`,
 	);
 }
@@ -491,16 +649,45 @@ function remediateDuplicateAccountNames(db: Database): void {
 	}
 }
 
-function ensureAccountsNameUniqueness(db: Database): void {
-	remediateDuplicateAccountNames(db);
-	db.run(
+function ensureAccountsNameUniqueness(
+	db: Database,
+	progress: MigrationProgress,
+): void {
+	const operation =
+		"create unique index idx_accounts_name_unique on accounts(name)";
+	if (schemaObjectExists(db, "index", "idx_accounts_name_unique")) {
+		progress.skip(
+			"index:idx_accounts_name_unique",
+			operation,
+			"already present",
+		);
+		return;
+	}
+
+	progress.apply(
+		"index:idx_accounts_name_unique:remediate",
+		"scan and rename duplicate account names before creating unique index",
+		() => remediateDuplicateAccountNames(db),
+	);
+	ensureIndex(
+		db,
+		progress,
+		"idx_accounts_name_unique",
+		operation,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_accounts_name_unique ON accounts(name)`,
 	);
 }
 
-export function ensureSchema(db: Database): void {
-	// Create accounts table
-	db.run(`
+export function ensureSchema(db: Database, progress?: MigrationProgress): void {
+	const activeProgress = progress ?? new MigrationProgress();
+	const summarize = progress === undefined;
+	try {
+		// Create accounts table
+		ensureTable(
+			db,
+			activeProgress,
+			"accounts",
+			`
 		CREATE TABLE IF NOT EXISTS accounts (
 			id TEXT PRIMARY KEY,
 			name TEXT NOT NULL,
@@ -524,11 +711,16 @@ export function ensureSchema(db: Database): void {
 			rate_limit_status TEXT,
 			rate_limit_remaining INTEGER
 		)
-	`);
-	ensureAccountsNameUniqueness(db);
+	`,
+		);
+		ensureAccountsNameUniqueness(db, activeProgress);
 
-	// Create requests table
-	db.run(`
+		// Create requests table
+		ensureTable(
+			db,
+			activeProgress,
+			"requests",
+			`
 		CREATE TABLE IF NOT EXISTS requests (
 			id TEXT PRIMARY KEY,
 			timestamp INTEGER NOT NULL,
@@ -562,27 +754,47 @@ export function ensureSchema(db: Database): void {
 			upstream_ttfb_ms INTEGER,
 			streaming_duration_ms INTEGER
 		)
-	`);
+	`,
+		);
 
-	// Create index for faster queries
-	db.run(
-		`CREATE INDEX IF NOT EXISTS idx_requests_timestamp ON requests(timestamp DESC)`,
-	);
+		// Create index for faster queries
+		ensureIndex(
+			db,
+			activeProgress,
+			"idx_requests_timestamp",
+			"create index idx_requests_timestamp on requests(timestamp DESC)",
+			`CREATE INDEX IF NOT EXISTS idx_requests_timestamp ON requests(timestamp DESC)`,
+		);
 
-	// Create request_payloads table for storing full request/response data
-	db.run(`
+		// Create request_payloads table for storing full request/response data
+		ensureTable(
+			db,
+			activeProgress,
+			"request_payloads",
+			`
 		CREATE TABLE IF NOT EXISTS request_payloads (
 			id TEXT PRIMARY KEY,
 			json TEXT NOT NULL,
 			FOREIGN KEY (id) REFERENCES requests(id) ON DELETE CASCADE
 		)
-	`);
+	`,
+		);
 
-	ensureAuthSessionsTable(db);
+		ensureAuthSessionsTable(db, activeProgress);
+	} finally {
+		if (summarize) activeProgress.summarize();
+	}
 }
 
-function ensureWebSocketTranscriptTable(db: Database): void {
-	db.run(`
+function ensureWebSocketTranscriptTable(
+	db: Database,
+	progress: MigrationProgress,
+): void {
+	ensureTable(
+		db,
+		progress,
+		"websocket_transcript_chunks",
+		`
 		CREATE TABLE IF NOT EXISTS websocket_transcript_chunks (
 			request_id TEXT NOT NULL,
 			chunk_sequence INTEGER NOT NULL,
@@ -596,31 +808,42 @@ function ensureWebSocketTranscriptTable(db: Database): void {
 			PRIMARY KEY (request_id, chunk_sequence),
 			FOREIGN KEY (request_id) REFERENCES requests(id) ON DELETE CASCADE
 		)
-	`);
-	db.run(`
+	`,
+	);
+	ensureIndex(
+		db,
+		progress,
+		"idx_websocket_chunks_request_last_frame",
+		"create index idx_websocket_chunks_request_last_frame on websocket_transcript_chunks(request_id, last_frame_sequence)",
+		`
 		CREATE INDEX IF NOT EXISTS idx_websocket_chunks_request_last_frame
 		ON websocket_transcript_chunks(request_id, last_frame_sequence)
-	`);
-}
-
-function tableExists(db: Database, tableName: string): boolean {
-	return (
-		db
-			.query(
-				`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1`,
-			)
-			.get(tableName) !== null
+	`,
 	);
 }
 
-function removeOrphanedRequestChildren(db: Database): void {
+function tableExists(db: Database, tableName: string): boolean {
+	return schemaObjectExists(db, "table", tableName);
+}
+
+function removeOrphanedRequestChildren(
+	db: Database,
+	progress: MigrationProgress,
+): void {
 	for (const [table, column] of [
 		["request_payloads", "id"],
 		["websocket_transcript_chunks", "request_id"],
 	] as const) {
-		if (!tableExists(db, table)) continue;
-		const result = db.run(
-			`DELETE FROM ${table} WHERE ${column} NOT IN (SELECT id FROM requests)`,
+		const id = `legacy_requests_v2:remove-orphans:${table}`;
+		const operation = `remove orphaned rows from ${table} before rebuilding requests`;
+		if (!tableExists(db, table)) {
+			progress.skip(id, operation, "child table not present");
+			continue;
+		}
+		const result = progress.apply(id, operation, () =>
+			db.run(
+				`DELETE FROM ${table} WHERE ${column} NOT IN (SELECT id FROM requests)`,
+			),
 		);
 		if (result.changes > 0) {
 			log.warn(
@@ -632,72 +855,118 @@ function removeOrphanedRequestChildren(db: Database): void {
 
 function rebuildLegacyTables(
 	db: Database,
+	progress: MigrationProgress,
 	options: {
 		accounts: boolean;
 		requests: boolean;
 	},
 ): void {
-	if (!options.accounts && !options.requests) return;
+	if (!options.accounts && !options.requests) {
+		progress.skip(
+			"legacy_table_rebuild",
+			"rebuild legacy accounts or requests tables",
+			"current table layouts already match",
+		);
+		return;
+	}
 
 	const foreignKeys = db.query("PRAGMA foreign_keys").get() as {
 		foreign_keys: 0 | 1;
 	} | null;
 	const restoreForeignKeys = foreignKeys?.foreign_keys === 1;
-	if (options.requests) removeOrphanedRequestChildren(db);
+	if (options.requests) removeOrphanedRequestChildren(db, progress);
 
 	// SQLite ignores PRAGMA foreign_keys changes inside a transaction. Disable it
 	// before rebuilding parent tables so DROP TABLE cannot cascade-delete child
 	// payload/transcript rows.
-	if (restoreForeignKeys) db.exec("PRAGMA foreign_keys = OFF");
-	db.run("BEGIN");
-	try {
-		if (options.accounts) {
-			migrateAccountsTable(db, getTableInfo(db, "accounts"));
-		}
-		if (options.requests) {
-			migrateRequestsTable(db, getTableInfo(db, "requests"));
-		}
-		db.run("COMMIT");
-	} catch (error) {
-		db.run("ROLLBACK");
-		throw error;
-	} finally {
-		if (restoreForeignKeys) db.exec("PRAGMA foreign_keys = ON");
-	}
-
-	const violations = db.query("PRAGMA foreign_key_check").all();
-	if (violations.length > 0) {
-		throw new Error(
-			`Database migration left ${violations.length} foreign-key violation(s)`,
+	if (restoreForeignKeys) {
+		progress.apply(
+			"legacy_table_rebuild:disable-foreign-keys",
+			"disable foreign-key enforcement before rebuilding parent tables",
+			() => db.exec("PRAGMA foreign_keys = OFF"),
 		);
 	}
+	progress.apply(
+		"legacy_table_rebuild:begin",
+		"begin legacy table rebuild transaction",
+		() => db.run("BEGIN"),
+	);
+	try {
+		if (options.accounts) {
+			migrateAccountsTable(db, getTableInfo(db, "accounts"), progress);
+		}
+		if (options.requests) {
+			migrateRequestsTable(db, getTableInfo(db, "requests"), progress);
+		}
+		progress.apply(
+			"legacy_table_rebuild:commit",
+			"commit legacy table rebuild transaction",
+			() => db.run("COMMIT"),
+		);
+	} catch (error) {
+		progress.apply(
+			"legacy_table_rebuild:rollback",
+			"roll back failed legacy table rebuild transaction",
+			() => db.run("ROLLBACK"),
+		);
+		throw error;
+	} finally {
+		if (restoreForeignKeys) {
+			progress.apply(
+				"legacy_table_rebuild:restore-foreign-keys",
+				"restore foreign-key enforcement after rebuilding parent tables",
+				() => db.exec("PRAGMA foreign_keys = ON"),
+			);
+		}
+	}
+
+	progress.apply(
+		"legacy_table_rebuild:foreign-key-check",
+		"validate rebuilt tables with PRAGMA foreign_key_check",
+		() => {
+			const violations = db.query("PRAGMA foreign_key_check").all();
+			if (violations.length > 0) {
+				throw new Error(
+					`Database migration left ${violations.length} foreign-key violation(s)`,
+				);
+			}
+		},
+	);
 }
 
 export function runMigrations(db: Database): void {
-	// Ensure base schema exists first
-	ensureSchema(db);
-	ensureSchemaMigrationsTable(db);
+	const progress = new MigrationProgress();
+	try {
+		// Ensure base schema exists first
+		ensureSchema(db, progress);
+		ensureSchemaMigrationsTable(db, progress);
 
-	const accountsInfo = getTableInfo(db, "accounts");
-	const requestsInfo = getTableInfo(db, "requests");
-	rebuildLegacyTables(db, {
-		accounts: shouldMigrateAccountsTable(accountsInfo),
-		requests: shouldMigrateRequestsTable(requestsInfo),
-	});
+		const accountsInfo = getTableInfo(db, "accounts");
+		const requestsInfo = getTableInfo(db, "requests");
+		rebuildLegacyTables(db, progress, {
+			accounts: shouldMigrateAccountsTable(accountsInfo),
+			requests: shouldMigrateRequestsTable(requestsInfo),
+		});
 
-	ensureRequestLinkageColumns(db);
-	backfillRequestLinkageColumns(db);
+		ensureRequestLinkageColumns(db, progress);
+		backfillRequestLinkageColumns(db, progress);
 
-	db.run("DROP TABLE IF EXISTS agent_preferences");
-	db.run("DROP TABLE IF EXISTS oauth_sessions");
-	db.run("DROP INDEX IF EXISTS idx_oauth_sessions_expires");
-	ensureAuthSessionsTable(db);
-	ensureAccountsNameUniqueness(db);
-	ensureWebSocketTranscriptTable(db);
+		dropSchemaObject(db, progress, "table", "agent_preferences");
+		dropSchemaObject(db, progress, "table", "oauth_sessions");
+		dropSchemaObject(db, progress, "index", "idx_oauth_sessions_expires");
+		ensureAuthSessionsTable(db, progress);
+		ensureAccountsNameUniqueness(db, progress);
+		ensureWebSocketTranscriptTable(db, progress);
 
-	// Add performance indexes
-	db.run(
-		`CREATE INDEX IF NOT EXISTS idx_requests_timestamp ON requests(timestamp DESC)`,
-	);
-	addPerformanceIndexes(db);
+		ensureIndex(
+			db,
+			progress,
+			"idx_requests_timestamp",
+			"create index idx_requests_timestamp on requests(timestamp DESC)",
+			`CREATE INDEX IF NOT EXISTS idx_requests_timestamp ON requests(timestamp DESC)`,
+		);
+		addPerformanceIndexes(db, progress);
+	} finally {
+		progress.summarize();
+	}
 }
