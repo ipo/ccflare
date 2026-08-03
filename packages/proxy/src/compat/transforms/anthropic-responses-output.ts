@@ -46,37 +46,14 @@ export function buildAnthropicResponsesOutput(
 
 			const callId = state.functionCallIds.get(outputIndex);
 			if (callId) {
-				const name = state.functionNames.get(outputIndex) ?? "tool";
-				const namespace = state.functionNamespaces.get(outputIndex);
-				const argumentsText = state.functionArguments.get(outputIndex) ?? "";
-				if (state.functionTypes.get(outputIndex) === "custom_tool_call") {
-					let input = "";
-					try {
-						const parsed = JSON.parse(argumentsText) as { input?: unknown };
-						input = typeof parsed.input === "string" ? parsed.input : "";
-					} catch {
-						input = "";
-					}
-					items.push({
-						id: `ctc_${callId}`,
-						type: "custom_tool_call",
-						status: "completed",
-						call_id: callId,
-						name,
-						...(namespace ? { namespace } : {}),
-						input,
-					});
-				} else {
-					items.push({
-						id: `fc_${callId}`,
-						type: "function_call",
-						status: "completed",
-						call_id: callId,
-						name,
-						...(namespace ? { namespace } : {}),
-						arguments: argumentsText,
-					});
-				}
+				items.push({
+					id: `fc_${callId}`,
+					type: "function_call",
+					status: "completed",
+					call_id: callId,
+					name: state.functionNames.get(outputIndex) ?? "tool",
+					arguments: state.functionArguments.get(outputIndex) ?? "",
+				});
 			}
 
 			return items;

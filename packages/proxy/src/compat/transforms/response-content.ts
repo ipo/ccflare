@@ -4,10 +4,6 @@ import {
 	buildAnthropicTextBlock,
 	extractAnthropicTextAndTools,
 } from "./content-parts";
-import {
-	projectResponsesTools,
-	reverseResponsesToolCall,
-} from "./responses-tool-projection";
 import { generateId, maybeParseJson } from "./shared";
 
 export function convertAnthropicJsonToOpenAIChatMessage(
@@ -26,12 +22,8 @@ export function convertAnthropicJsonToOpenAIChatMessage(
 
 export function convertAnthropicContentToOpenAIResponsesOutput(
 	content: unknown,
-	originalRequest?: JsonRecord,
 ): JsonRecord[] {
 	const output: JsonRecord[] = [];
-	const reverseByWireName = originalRequest
-		? projectResponsesTools(originalRequest).reverseByWireName
-		: new Map();
 	for (const block of Array.isArray(content) ? content : []) {
 		if (!isRecord(block)) continue;
 		if (block.type === "text") {
@@ -44,16 +36,13 @@ export function convertAnthropicContentToOpenAIResponsesOutput(
 			});
 		}
 		if (block.type === "tool_use") {
-			const mapped = reverseResponsesToolCall(
-				typeof block.name === "string" ? block.name : "tool",
-				block.input,
-				reverseByWireName,
-			);
 			output.push({
-				id: generateId(mapped.type === "custom_tool_call" ? "ctc" : "fc"),
-				...mapped,
+				id: generateId("fc"),
+				type: "function_call",
 				status: "completed",
 				call_id: typeof block.id === "string" ? block.id : generateId("call"),
+				name: typeof block.name === "string" ? block.name : "tool",
+				arguments: JSON.stringify(block.input ?? {}),
 			});
 		}
 		if (block.type === "thinking") {

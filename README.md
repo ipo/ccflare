@@ -58,12 +58,11 @@ the `model` prefix:
 
 - `openai/<model-id>` → prefers `codex`, then `openai`
 - `anthropic/<model-id>` → prefers `claude-code`, then `anthropic`
-- `kimi/<model-id>` → uses `kimi`
 
 An unprefixed model uses the route's native family (`openai` on OpenAI
 compatibility routes and `anthropic` on Anthropic compatibility routes).
-OpenAI Responses requests can target Kimi in both JSON and streaming modes;
-streaming Kimi Chat Completions events are translated into Responses events.
+Kimi models are native-only and use `/v1/kimi/chat/completions`; compatibility
+routes reject `kimi/` model IDs with guidance to use that route.
 
 Examples:
 
@@ -138,13 +137,15 @@ You can configure both providers at the same time and ccflare will keep account 
 
 ### Codex unified model picker
 
-Codex can use one Claudeflare provider for OpenAI, Anthropic, and Kimi selections
-through the Responses compatibility route. Configure the static catalog overlay as
-shown in the [Codex configuration example](docs/configuration.md#codex-unified-model-catalog).
+Codex can use one Claudeflare provider with model-specific native routes for
+OpenAI Responses, Claude Code Messages, and Kimi Chat Completions. Configure the
+static catalog overlay and named wire routes as shown in the
+[Codex configuration example](docs/configuration.md#codex-unified-model-catalog).
 The picker shows canonical catalog IDs such as `anthropic/claude-sonnet-5` and
 `kimi/k3`, while Codex also accepts the overlay's pi aliases such as `sonnet-5`,
 `5.6-sol`, and `k3`. Codex resolves aliases before sending the canonical ID to
-ccflare; the proxy does not route aliases itself.
+ccflare. The catalog's inference metadata selects the native provider route;
+the proxy does not route aliases itself.
 
 ## Example usage
 

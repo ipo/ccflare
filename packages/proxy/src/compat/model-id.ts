@@ -1,4 +1,4 @@
-export type ModelFamilyAlias = "anthropic" | "kimi" | "openai";
+export type ModelFamilyAlias = "anthropic" | "openai";
 
 export type StrippedModel = {
 	family: ModelFamilyAlias;
@@ -20,10 +20,7 @@ export function stripCompatibilityModelPrefix(
 
 	const family = trimmed.slice(0, separator);
 	const modelId = trimmed.slice(separator + 1).trim();
-	if (
-		(family !== "anthropic" && family !== "kimi" && family !== "openai") ||
-		modelId.length === 0
-	) {
+	if ((family !== "anthropic" && family !== "openai") || modelId.length === 0) {
 		return null;
 	}
 

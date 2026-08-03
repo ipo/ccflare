@@ -211,6 +211,15 @@ name = "Claudeflare"
 base_url = "http://127.0.0.1:8080/v1/ccflare/openai"
 wire_api = "responses"
 supports_websockets = false
+requires_openai_auth = false
+
+[model_providers.claudeflare.wire_routes.claude_code]
+base_url = "http://127.0.0.1:8080/v1/claude-code"
+stream_max_retries = 10
+
+[model_providers.claudeflare.wire_routes.kimi_code]
+base_url = "http://127.0.0.1:8080/v1/kimi"
+stream_max_retries = 6
 ```
 
 The catalog is loaded at Codex startup, so restart Codex after changing
@@ -220,18 +229,18 @@ published by the overlay, including `opus-5`, `5.6-sol`, and `kimi-2.7`, and
 resolves them to canonical IDs before making a request. The first alias listed
 for each model is Codex's preferred `spawn_agent` selector.
 
-The provider always uses the Responses API. Codex reads each catalog entry's
-`use_responses_lite` mode at startup and selects the corresponding transport.
-Claudeflare receives the resulting request, preserves its
-`parallel_tool_calls` value unchanged, and selects and translates the upstream
-OpenAI, Anthropic, or Kimi family from the canonical model ID; alias resolution
-is not proxy routing.
+Codex reads each catalog entry's `inference` metadata at startup. OpenAI models
+keep using the provider's Responses route, Anthropic models select the named
+`claude_code` Messages route, and Kimi models select the named `kimi_code` Chat
+Completions route. Claudeflare handles provider authentication, account
+selection, forwarding, and recording without translating those native Claude
+or Kimi payloads. Alias resolution is not proxy routing.
 
 The overlay explicitly assigns each picker model a
 `history_compatibility_group`, which controls inherited-history eligibility.
-Only Kimi entries set `requires_nonempty_assistant_messages`; Codex filters
-empty assistant messages only while projecting requests to Kimi. Cross-family
-collaboration messages remain plaintext.
+Native model inference metadata also owns each family's wire model, output
+budget, and thinking policy. Cross-family collaboration messages remain
+plaintext.
 
 ### High Throughput Setup
 

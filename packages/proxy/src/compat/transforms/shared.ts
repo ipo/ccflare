@@ -40,9 +40,6 @@ export function textContentFromUnknown(value: unknown): string {
 const ANTHROPIC_46_MODEL_RE = /claude-.*(?:4[-._]?6)/i;
 const ANTHROPIC_OPUS_46_MODEL_RE =
 	/claude-opus-.*(?:4[-._]?6)|claude-opus(?:[-._]?4[-._]?6)/i;
-const ANTHROPIC_ADAPTIVE_5_MODEL_RE =
-	/claude-(?:fable|opus|sonnet)[-._]?5(?:\b|[-._])/i;
-const ANTHROPIC_OPUS_48_MODEL_RE = /claude-opus[-._]?4[-._]?8(?:\b|[-._])/i;
 
 const LEVEL_TO_BUDGET: Record<string, number> = {
 	none: 0,
@@ -85,19 +82,11 @@ export function convertBudgetToReasoningEffort(
 }
 
 export function claudeModelSupportsAdaptive(model: string): boolean {
-	return (
-		ANTHROPIC_46_MODEL_RE.test(model) ||
-		ANTHROPIC_ADAPTIVE_5_MODEL_RE.test(model) ||
-		ANTHROPIC_OPUS_48_MODEL_RE.test(model)
-	);
+	return ANTHROPIC_46_MODEL_RE.test(model);
 }
 
 export function claudeModelSupportsMax(model: string): boolean {
-	return (
-		ANTHROPIC_OPUS_46_MODEL_RE.test(model) ||
-		ANTHROPIC_ADAPTIVE_5_MODEL_RE.test(model) ||
-		ANTHROPIC_OPUS_48_MODEL_RE.test(model)
-	);
+	return ANTHROPIC_OPUS_46_MODEL_RE.test(model);
 }
 
 export function mapToClaudeEffort(
@@ -273,7 +262,6 @@ function createSseTransformState(): SseTransformState {
 function extractSseFrames(
 	state: SseTransformState,
 	chunk?: Uint8Array,
-	maxBufferedChars?: number,
 ): SseFrame[] {
 	if (chunk) {
 		state.buffer += state.decoder.decode(chunk, { stream: true });
@@ -295,11 +283,6 @@ function extractSseFrames(
 			separatorLength = 4;
 		}
 		if (separatorIndex < 0) break;
-		if (maxBufferedChars !== undefined && separatorIndex > maxBufferedChars) {
-			throw new Error(
-				`SSE frame exceeded ${maxBufferedChars} buffered characters`,
-			);
-		}
 
 		const block = state.buffer.slice(0, separatorIndex);
 		state.buffer = state.buffer.slice(separatorIndex + separatorLength);
@@ -321,14 +304,6 @@ function extractSseFrames(
 			data: dataLines.join("\n"),
 		});
 	}
-	if (
-		maxBufferedChars !== undefined &&
-		state.buffer.length > maxBufferedChars
-	) {
-		throw new Error(
-			`SSE frame exceeded ${maxBufferedChars} buffered characters`,
-		);
-	}
 
 	return frames;
 }
@@ -344,12 +319,6 @@ export function isStreamingResponse(response: Response): boolean {
 export function createTransformedSseResponse(
 	response: Response,
 	transform: (frame: SseFrame) => string[],
-	options?: {
-		finalize?: () => string[];
-		onError?: (error: unknown) => string[];
-		maxBufferedChars?: number;
-		requireCompleteFrames?: boolean;
-	},
 ): Response {
 	const state = createSseTransformState();
 	const upstream = response.body;
@@ -370,45 +339,23 @@ export function createTransformedSseResponse(
 			try {
 				for (;;) {
 					const { value, done } = await reader.read();
-					const frames = extractSseFrames(
-						state,
-						done ? undefined : value,
-						options?.maxBufferedChars,
-					);
+					const frames = extractSseFrames(state, done ? undefined : value);
 					const parts: string[] = [];
-					if (
-						done &&
-						options?.requireCompleteFrames === true &&
-						state.buffer.trim().length > 0
-					) {
-						throw new Error("SSE stream ended with an incomplete frame");
-					}
 					for (const frame of frames) {
 						for (const output of transform(frame)) {
-							parts.push(output);
-						}
-					}
-					if (done) {
-						for (const output of options?.finalize?.() ?? []) {
 							parts.push(output);
 						}
 					}
 					if (parts.length > 0) {
 						controller.enqueue(state.encoder.encode(parts.join("")));
 					}
-					if (done) break;
+					if (done) {
+						break;
+					}
 				}
 				controller.close();
 			} catch (error) {
-				if (options?.onError) {
-					const outputs = options.onError(error);
-					if (outputs.length > 0) {
-						controller.enqueue(state.encoder.encode(outputs.join("")));
-					}
-					controller.close();
-				} else {
-					controller.error(error);
-				}
+				controller.error(error);
 			} finally {
 				reader.releaseLock();
 			}

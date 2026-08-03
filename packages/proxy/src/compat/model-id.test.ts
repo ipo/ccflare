@@ -17,10 +17,7 @@ describe("compat model id helpers", () => {
 			family: "anthropic",
 			model: "claude-sonnet-4",
 		});
-		expect(stripCompatibilityModelPrefix("kimi/k3")).toEqual({
-			family: "kimi",
-			model: "k3",
-		});
+		expect(stripCompatibilityModelPrefix("kimi/k3")).toBeNull();
 	});
 
 	it("uses the route family only for unprefixed models", () => {
@@ -33,8 +30,8 @@ describe("compat model id helpers", () => {
 			model: "claude-sonnet-5",
 		});
 		expect(resolveCompatibilityModel("kimi/k3", "openai")).toEqual({
-			family: "kimi",
-			model: "k3",
+			family: "openai",
+			model: "kimi/k3",
 		});
 	});
 
@@ -56,7 +53,6 @@ describe("compat model id helpers", () => {
 		expect(COMPAT_PROVIDER_ORDER).toEqual({
 			openai: ["codex", "openai"],
 			anthropic: ["claude-code", "anthropic"],
-			kimi: ["kimi"],
 		});
 		expect(parseCompatibilityRoute("/v1/ccflare/openai/responses")).toEqual({
 			kind: "openai-responses",
@@ -66,5 +62,8 @@ describe("compat model id helpers", () => {
 			kind: "anthropic-messages",
 			nativeFamily: "anthropic",
 		});
+		expect(
+			parseCompatibilityRoute("/v1/ccflare/anthropic/v1/messages"),
+		).toBeNull();
 	});
 });

@@ -283,20 +283,19 @@ A model id absent from the catalogue logs one warning and records a cost of 0.
 
 ### Codex unified catalog
 
-`integrations/codex/models.json` is a static Codex catalog overlay for the
-single `http://127.0.0.1:8080/v1/ccflare/openai` Responses provider. It exposes
-canonical OpenAI IDs without an `openai/` picker duplicate and uses
-`anthropic/` and `kimi/` IDs to select those compatibility families. Restart
-Codex after changing the overlay. The overlay publishes pi aliases alongside
-each canonical model, with the preferred `spawn_agent` selector first. Codex
-resolves those aliases to canonical IDs before requests reach Claudeflare, so
-the proxy's model-family routing remains canonical-ID based.
+`integrations/codex/models.json` is a static Codex catalog overlay for one
+Claudeflare provider with named native wire routes. It exposes canonical OpenAI
+IDs without an `openai/` picker duplicate and preserves canonical `anthropic/`
+and `kimi/` IDs for model selection. Each external model has explicit inference
+metadata selecting the direct Claude Code Messages or Kimi Chat Completions
+route. Restart Codex after changing the overlay. The overlay publishes pi
+aliases alongside each canonical model, with the preferred `spawn_agent`
+selector first. Codex resolves aliases before requests reach Claudeflare.
 
 Each picker entry explicitly declares its `history_compatibility_group`, which
-governs eligibility for inherited history. Kimi entries also set
-`requires_nonempty_assistant_messages`, so Codex removes empty assistant
-messages only when projecting a request to Kimi. Cross-family collaboration
-messages remain plaintext.
+governs eligibility for inherited history. Native inference metadata keeps
+model family, wire protocol, dialect, route, output budget, and thinking policy
+explicit. Cross-family collaboration messages remain plaintext.
 
 ### Anthropic
 
@@ -328,9 +327,8 @@ messages remain plaintext.
 - upstream base URL defaults to `https://api.kimi.com/coding/v1`
 - OpenAI-compatible chat-completions upstream, so URL building, rate-limit
   parsing and usage extraction are inherited from the OpenAI provider
-- Responses compatibility requests are converted to Chat Completions; Kimi
-  SSE reasoning, text, tool-call, usage, and terminal chunks are converted back
-  into the OpenAI Responses event lifecycle
+- native clients send Chat Completions JSON/SSE directly through
+  `/v1/kimi/chat/completions`; compatibility routes do not translate Kimi
 - access tokens are short-lived (900s), so refresh happens frequently and the
   refresh token is rotated on each refresh
 - plan model ids are aliased onto Moonshot's metered ids for costing; see

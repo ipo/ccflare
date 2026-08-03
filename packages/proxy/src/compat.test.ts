@@ -4,7 +4,6 @@ import {
 	ClaudeCodeProvider,
 	CodexProvider,
 	createProviderRegistry,
-	KimiProvider,
 	OpenAIProvider,
 } from "@ccflare/providers";
 import type { Account, AccountProvider } from "@ccflare/types";
@@ -24,7 +23,6 @@ function createProxyContext(
 			new OpenAIProvider(),
 			new ClaudeCodeProvider(),
 			new CodexProvider(),
-			new KimiProvider(),
 		]),
 		strategy: {
 			select(accounts: Account[]) {
@@ -85,261 +83,29 @@ describe("handleCompatibilityProxy", () => {
 		expect(response.status).toBe(503);
 	});
 
-	it("streams the captured Kimi Code fixture through the public Responses route", async () => {
-		let capturedUrl = "";
-		let capturedBody: unknown;
-		const fixture = await Bun.file(
-			new URL("./compat/fixtures/kimi-code-chat-stream.sse", import.meta.url),
-		).text();
-		globalThis.fetch = Object.assign(
-			async (input: RequestInfo | URL, init?: RequestInit) => {
-				const upstream = new Request(input, init);
-				capturedUrl = upstream.url;
-				capturedBody = await upstream.json();
-				return new Response(fixture, {
-					status: 206,
-					headers: {
-						"content-type": "text/event-stream",
-						"x-kimi-trace": "captured-fixture",
-					},
-				});
-			},
-			{ preconnect: originalFetch.preconnect },
-		) as typeof fetch;
-		const requestBody = {
-			model: "kimi/k3",
-			input: "Check the weather.",
-			stream: true,
-			metadata: { fixture: "kimi-code-captured" },
-			tools: [
-				{
-					type: "function",
-					name: "lookup_weather",
-					description: "Look up weather",
-					parameters: { type: "object" },
-				},
-			],
-		};
-		const response = await handleCompatibilityProxy(
-			new Request("http://localhost:8080/v1/ccflare/openai/responses", {
-				method: "POST",
-				headers: { "content-type": "application/json" },
-				body: JSON.stringify(requestBody),
-			}),
-			new URL("http://localhost:8080/v1/ccflare/openai/responses"),
-			createProxyContext({ kimi: [createOAuthAccount("kimi")] }),
-		);
-		if (!response) throw new Error("Expected a response");
-		expect(capturedUrl).toBe("https://api.kimi.com/coding/v1/chat/completions");
-		expect(capturedBody).toEqual({
-			model: "k3",
-			messages: [{ role: "user", content: "Check the weather." }],
-			stream: true,
-			stream_options: { include_usage: true },
-			tools: [
-				{
-					type: "function",
-					function: {
-						name: "lookup_weather",
-						description: "Look up weather",
-						parameters: { type: "object" },
-					},
-				},
-			],
-		});
-		expect(response.status).toBe(206);
-		expect(response.headers.get("x-kimi-trace")).toBe("captured-fixture");
-		const text = await response.text();
-		expect(text).toContain('"type":"response.reasoning_summary_text.delta"');
-		expect(text).toContain('"type":"response.output_text.delta"');
-		expect(text).toContain('"type":"response.function_call_arguments.delta"');
-		expect(text).toContain('"call_id":"call_weather"');
-		expect(text).toContain('"arguments":"{\\"city\\":\\"Shanghai\\"}"');
-		expect(text).toContain('"input_tokens":12');
-		expect(text).toContain('"metadata":{"fixture":"kimi-code-captured"}');
-		expect(text).toContain('"type":"response.completed"');
-	});
-
-	it("fails closed on malformed Kimi tool argument fragments", async () => {
-		const fixture = await Bun.file(
-			new URL(
-				"./compat/fixtures/kimi-malformed-tool-arguments.sse",
-				import.meta.url,
-			),
-		).text();
-		globalThis.fetch = Object.assign(
-			async () =>
-				new Response(fixture, {
-					headers: { "content-type": "text/event-stream" },
+	it("rejects Kimi-prefixed models on every compatibility endpoint", async () => {
+		for (const path of [
+			"/v1/ccflare/anthropic/messages",
+			"/v1/ccflare/openai/chat/completions",
+			"/v1/ccflare/openai/responses",
+		]) {
+			const response = await handleCompatibilityProxy(
+				new Request(`http://localhost:8080${path}`, {
+					method: "POST",
+					headers: { "content-type": "application/json" },
+					body: JSON.stringify({ model: "kimi/k3", input: "hello" }),
 				}),
-			{ preconnect: originalFetch.preconnect },
-		) as typeof fetch;
+				new URL(`http://localhost:8080${path}`),
+				createProxyContext({ kimi: [createOAuthAccount("kimi")] }),
+			);
 
-		const response = await handleCompatibilityProxy(
-			new Request("http://localhost:8080/v1/ccflare/openai/responses", {
-				method: "POST",
-				headers: { "content-type": "application/json" },
-				body: JSON.stringify({
-					model: "kimi/k3",
-					input: "Check the weather.",
-					stream: true,
-					tools: [{ type: "function", name: "lookup_weather", parameters: {} }],
-				}),
-			}),
-			new URL("http://localhost:8080/v1/ccflare/openai/responses"),
-			createProxyContext({ kimi: [createOAuthAccount("kimi")] }),
-		);
-		if (!response) throw new Error("Expected a response");
-
-		const text = await response.text();
-		expect(text).toContain('"type":"response.failed"');
-		expect(text).toContain(
-			'"message":"Kimi tool-call arguments fragment must be a string"',
-		);
-		expect(text).not.toContain('"type":"response.completed"');
-	});
-
-	it("translates a full non-streaming Kimi Responses request and response", async () => {
-		let capturedUrl = "";
-		let capturedBody: unknown;
-		globalThis.fetch = Object.assign(
-			async (input: RequestInfo | URL, init?: RequestInit) => {
-				const upstream = new Request(input, init);
-				capturedUrl = upstream.url;
-				capturedBody = await upstream.json();
-				return new Response(
-					JSON.stringify({
-						id: "chatcmpl_kimi",
-						object: "chat.completion",
-						created: 42,
-						model: "k3",
-						choices: [
-							{
-								index: 0,
-								message: {
-									role: "assistant",
-									content: "hello from Kimi",
-									reasoning_content: "brief thought",
-								},
-								finish_reason: "stop",
-							},
-						],
-						usage: {
-							prompt_tokens: 4,
-							completion_tokens: 3,
-							total_tokens: 7,
-						},
-					}),
-					{ status: 200, headers: { "content-type": "application/json" } },
-				);
-			},
-			{ preconnect: originalFetch.preconnect },
-		) as typeof fetch;
-
-		const requestBody = {
-			model: "kimi/k3",
-			input: "hello",
-			max_output_tokens: 64,
-			prompt_cache_key: "cache-1",
-			reasoning: { effort: "medium" },
-			metadata: { fixture: "handler" },
-		};
-		const response = await handleCompatibilityProxy(
-			new Request("http://localhost:8080/v1/ccflare/openai/responses", {
-				method: "POST",
-				headers: { "content-type": "application/json" },
-				body: JSON.stringify(requestBody),
-			}),
-			new URL("http://localhost:8080/v1/ccflare/openai/responses"),
-			createProxyContext({ kimi: [createOAuthAccount("kimi")] }),
-		);
-		if (!response) throw new Error("Expected a response");
-
-		expect(capturedUrl).toBe("https://api.kimi.com/coding/v1/chat/completions");
-		expect(capturedBody).toEqual({
-			model: "k3",
-			messages: [{ role: "user", content: "hello" }],
-			stream: false,
-			max_completion_tokens: 64,
-			prompt_cache_key: "cache-1",
-			thinking: { type: "enabled", effort: "medium" },
-		});
-		expect(await response.json()).toEqual({
-			id: "chatcmpl_kimi",
-			object: "response",
-			created_at: 42,
-			model: "k3",
-			status: "completed",
-			output: [
-				expect.objectContaining({
-					type: "reasoning",
-					summary: [{ type: "summary_text", text: "brief thought" }],
-				}),
-				expect.objectContaining({
-					type: "message",
-					content: [
-						{
-							type: "output_text",
-							text: "hello from Kimi",
-							annotations: [],
-						},
-					],
-				}),
-			],
-			usage: { input_tokens: 4, output_tokens: 3, total_tokens: 7 },
-			max_output_tokens: 64,
-			prompt_cache_key: "cache-1",
-			reasoning: { effort: "medium" },
-			metadata: { fixture: "handler" },
-		});
-	});
-
-	it("preserves an explicit Kimi prefix on the OpenAI Chat route", async () => {
-		let capturedUrl = "";
-		let capturedBody: unknown;
-		globalThis.fetch = Object.assign(
-			async (input: RequestInfo | URL, init?: RequestInit) => {
-				const upstream = new Request(input, init);
-				capturedUrl = upstream.url;
-				capturedBody = await upstream.json();
-				return new Response(
-					JSON.stringify({
-						id: "chatcmpl_native",
-						object: "chat.completion",
-						choices: [
-							{
-								message: { role: "assistant", content: "ok" },
-								finish_reason: "stop",
-							},
-						],
-					}),
-					{ headers: { "content-type": "application/json" } },
-				);
-			},
-			{ preconnect: originalFetch.preconnect },
-		) as typeof fetch;
-
-		const response = await handleCompatibilityProxy(
-			new Request("http://localhost:8080/v1/ccflare/openai/chat/completions", {
-				method: "POST",
-				headers: { "content-type": "application/json" },
-				body: JSON.stringify({
-					model: "kimi/k3",
-					messages: [{ role: "user", content: "hello" }],
-				}),
-			}),
-			new URL("http://localhost:8080/v1/ccflare/openai/chat/completions"),
-			createProxyContext({ kimi: [createOAuthAccount("kimi")] }),
-		);
-		if (!response) throw new Error("Expected a response");
-		expect(capturedUrl).toBe("https://api.kimi.com/coding/v1/chat/completions");
-		expect(capturedBody).toEqual({
-			model: "k3",
-			messages: [{ role: "user", content: "hello" }],
-		});
-		expect((await response.json()) as unknown).toEqual(
-			expect.objectContaining({ object: "chat.completion" }),
-		);
+			if (!response) throw new Error("Expected a response");
+			expect(response.status).toBe(400);
+			expect(await response.json()).toEqual({
+				error:
+					"Kimi models are not supported on compatibility routes; use POST /v1/kimi/chat/completions",
+			});
+		}
 	});
 
 	it("returns 503 when the requested family has no usable accounts", async () => {
@@ -361,120 +127,6 @@ describe("handleCompatibilityProxy", () => {
 		}
 
 		expect(response.status).toBe(503);
-	});
-
-	it("returns an actionable 400 for unsupported hosted Responses tools", async () => {
-		const response = await handleCompatibilityProxy(
-			new Request("http://localhost:8080/v1/ccflare/openai/responses", {
-				method: "POST",
-				headers: { "content-type": "application/json" },
-				body: JSON.stringify({
-					model: "anthropic/claude-sonnet-5",
-					input: "hello",
-					tools: [{ type: "web_search_preview" }],
-				}),
-			}),
-			new URL("http://localhost:8080/v1/ccflare/openai/responses"),
-			createProxyContext({}),
-		);
-
-		if (!response) throw new Error("Expected a response");
-		expect(response.status).toBe(400);
-		expect(await response.json()).toEqual({
-			error:
-				"Unsupported Responses hosted tool type 'web_search_preview' for Anthropic compatibility; remove it or use a function, namespace, or custom tool",
-		});
-	});
-
-	it("returns an actionable 400 for projected tool wire-name collisions", async () => {
-		const response = await handleCompatibilityProxy(
-			new Request("http://localhost:8080/v1/ccflare/openai/responses", {
-				method: "POST",
-				headers: { "content-type": "application/json" },
-				body: JSON.stringify({
-					model: "anthropic/claude-sonnet-5",
-					input: "hello",
-					tools: [
-						{ type: "function", name: "agents.spawn", parameters: {} },
-						{
-							type: "namespace",
-							name: "agents.",
-							tools: [{ type: "function", name: "spawn", parameters: {} }],
-						},
-					],
-				}),
-			}),
-			new URL("http://localhost:8080/v1/ccflare/openai/responses"),
-			createProxyContext({}),
-		);
-
-		if (!response) throw new Error("Expected a response");
-		expect(response.status).toBe(400);
-		expect(await response.json()).toEqual({
-			error:
-				"Responses tool wire-name collision for 'agents.spawn'; rename the conflicting ordinary, namespace, or custom tool",
-		});
-	});
-
-	it("forwards Responses tool_choice none without auto-enabling declared tools", async () => {
-		let seenBody: Record<string, unknown> | null = null;
-		globalThis.fetch = Object.assign(
-			async (input: RequestInfo | URL, init?: RequestInit) => {
-				const request = new Request(input, init);
-				seenBody = (await request.json()) as Record<string, unknown>;
-				return new Response(
-					JSON.stringify({
-						id: "msg_none",
-						type: "message",
-						role: "assistant",
-						model: "claude-sonnet-5",
-						content: [{ type: "text", text: "no tools used" }],
-						stop_reason: "end_turn",
-						usage: { input_tokens: 4, output_tokens: 3 },
-					}),
-					{ status: 200, headers: { "content-type": "application/json" } },
-				);
-			},
-			{ preconnect: originalFetch.preconnect },
-		) as typeof fetch;
-
-		const response = await handleCompatibilityProxy(
-			new Request("http://localhost:8080/v1/ccflare/openai/responses", {
-				method: "POST",
-				headers: { "content-type": "application/json" },
-				body: JSON.stringify({
-					model: "anthropic/claude-sonnet-5",
-					input: "do not use tools",
-					tools: [
-						{
-							type: "function",
-							name: "read",
-							parameters: { type: "object" },
-						},
-					],
-					tool_choice: "none",
-				}),
-			}),
-			new URL("http://localhost:8080/v1/ccflare/openai/responses"),
-			createProxyContext({
-				anthropic: [createApiKeyAccount("anthropic")],
-			}),
-		);
-
-		if (!response) throw new Error("Expected a response");
-		expect(response.status).toBe(200);
-		expect(seenBody).toEqual(
-			expect.objectContaining({
-				tools: [
-					{
-						name: "read",
-						description: "",
-						input_schema: { type: "object" },
-					},
-				],
-				tool_choice: { type: "none" },
-			}),
-		);
 	});
 
 	it("prefers codex ahead of openai for the public openai family", async () => {
@@ -689,7 +341,7 @@ describe("handleCompatibilityProxy", () => {
 		]);
 	});
 
-	it("accepts the Anthropic SDK messages path and applies Claude Code shaping", async () => {
+	it("accepts the retained Anthropic compatibility path and applies Claude Code shaping", async () => {
 		let seenBody: Record<string, unknown> | null = null;
 		globalThis.fetch = Object.assign(
 			async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -719,7 +371,7 @@ describe("handleCompatibilityProxy", () => {
 		) as typeof fetch;
 
 		const response = await handleCompatibilityProxy(
-			new Request("http://localhost:8080/v1/ccflare/anthropic/v1/messages", {
+			new Request("http://localhost:8080/v1/ccflare/anthropic/messages", {
 				method: "POST",
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify({
@@ -729,7 +381,7 @@ describe("handleCompatibilityProxy", () => {
 					messages: [{ role: "user", content: "hi" }],
 				}),
 			}),
-			new URL("http://localhost:8080/v1/ccflare/anthropic/v1/messages"),
+			new URL("http://localhost:8080/v1/ccflare/anthropic/messages"),
 			createProxyContext({
 				"claude-code": [createOAuthAccount("claude-code")],
 			}),

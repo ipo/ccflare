@@ -10,10 +10,11 @@ type CatalogEntry = {
 	context_window?: number;
 	max_context_window?: number;
 	input_modalities?: string[];
-	default_reasoning_level?: string;
+	default_reasoning_level?: string | null;
 	supported_reasoning_levels?: Array<{ effort: string }>;
 	history_compatibility_group?: "openai" | "anthropic" | "kimi";
 	requires_nonempty_assistant_messages?: boolean;
+	inference?: Record<string, unknown>;
 	[key: string]: unknown;
 };
 
@@ -71,7 +72,7 @@ const expectedResponsesLiteModes: Record<string, boolean> = {
 	"codex-auto-review": false,
 	"gpt-5.3-codex-spark": true,
 	...Object.fromEntries(anthropicModels.map((slug) => [slug, true])),
-	...Object.fromEntries(kimiModels.map((slug) => [slug, true])),
+	...Object.fromEntries(kimiModels.map((slug) => [slug, false])),
 };
 const expectedAliases: Record<string, string[]> = {
 	"gpt-5.6-sol": ["5.6-sol", "openai/gpt-5.6-sol"],
@@ -167,11 +168,12 @@ describe("Codex catalog overlay", () => {
 		expect(efforts("kimi/k3")).toEqual(["low", "high", "max"]);
 		expect(efforts("anthropic/claude-fable-5")).not.toContain("none");
 		expect(entry("kimi/kimi-for-coding")).toMatchObject({
-			default_reasoning_level: "on",
+			default_reasoning_level: null,
 			context_window: 262144,
 			max_context_window: 262144,
 		});
-		expect(efforts("kimi/kimi-for-coding")).toEqual(["none", "on"]);
+		expect(efforts("kimi/kimi-for-coding")).toEqual([]);
+		expect(entry("kimi/k3-256k").input_modalities).toEqual(["text", "image"]);
 	});
 
 	it("clears Codex-only metadata for every external model", () => {
@@ -179,12 +181,17 @@ describe("Codex catalog overlay", () => {
 			expect(entry(slug)).toMatchObject({
 				support_verbosity: false,
 				comp_hash: null,
-				use_responses_lite: true,
 				tool_mode: "direct",
 				supports_search_tool: false,
 				supports_parallel_tool_calls: true,
 				experimental_supported_tools: [],
 			});
+		}
+		for (const slug of anthropicModels) {
+			expect(entry(slug).use_responses_lite).toBe(true);
+		}
+		for (const slug of kimiModels) {
+			expect(entry(slug).use_responses_lite).toBe(false);
 		}
 	});
 
@@ -248,7 +255,7 @@ describe("Codex catalog overlay", () => {
 		expect(declaredModes).toEqual(expectedResponsesLiteModes);
 	});
 
-	it("requires nonempty assistant messages for Kimi models only", () => {
+	it("leaves Kimi empty-assistant shaping to the native encoder", () => {
 		const declaredFlags = Object.fromEntries(
 			overlay.models
 				.filter(
@@ -262,21 +269,40 @@ describe("Codex catalog overlay", () => {
 		);
 
 		expect(declaredFlags).toEqual(
-			Object.fromEntries(kimiModels.map((slug) => [slug, true])),
+			Object.fromEntries(kimiModels.map((slug) => [slug, false])),
 		);
 	});
 
-	it("retains canonical model slugs while routing every family through one provider", () => {
+	it("retains OpenAI Responses routing and selects native routes for external families", () => {
 		expect(resolveCompatibilityModel("gpt-5.6-sol", "openai")).toEqual({
 			family: "openai",
 			model: "gpt-5.6-sol",
 		});
-		expect(
-			resolveCompatibilityModel("anthropic/claude-sonnet-5", "openai"),
-		).toEqual({ family: "anthropic", model: "claude-sonnet-5" });
-		expect(resolveCompatibilityModel("kimi/k3", "openai")).toEqual({
-			family: "kimi",
-			model: "k3",
+
+		expect(entry("anthropic/claude-sonnet-5").inference).toEqual({
+			family: "anthropic",
+			wire_api: "anthropic_messages",
+			dialect: "claude_code",
+			route: "claude_code",
+			wire_model: "claude-sonnet-5",
+			max_output_tokens: 64000,
+			thinking: { type: "adaptive" },
+			supports_disabled_thinking: true,
 		});
+		expect(entry("kimi/k3").inference).toEqual({
+			family: "kimi",
+			wire_api: "chat_completions",
+			dialect: "kimi",
+			route: "kimi_code",
+			wire_model: "k3",
+			max_output_tokens: 131072,
+			thinking: "required_with_effort",
+		});
+		for (const slug of anthropicModels) {
+			expect(entry(slug).inference?.route).toBe("claude_code");
+		}
+		for (const slug of kimiModels) {
+			expect(entry(slug).inference?.route).toBe("kimi_code");
+		}
 	});
 });

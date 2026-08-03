@@ -87,7 +87,8 @@
         { "effort": "low", "description": "Lower adaptive thinking effort" },
         { "effort": "medium", "description": "Balanced adaptive thinking effort" },
         { "effort": "high", "description": "Higher adaptive thinking effort" },
-        { "effort": "xhigh", "description": "Maximum adaptive thinking effort" }
+        { "effort": "xhigh", "description": "Extra high adaptive thinking effort" },
+        { "effort": "max", "description": "Maximum adaptive thinking effort" }
       ],
       "priority": 20,
       "context_window": 1000000,
@@ -105,7 +106,17 @@
       "tool_mode": "direct",
       "aliases": ["fable-5"],
       "history_compatibility_group": "anthropic",
-      "multi_agent_version": "v2"
+      "multi_agent_version": "v2",
+      "inference": {
+        "family": "anthropic",
+        "wire_api": "anthropic_messages",
+        "dialect": "claude_code",
+        "route": "claude_code",
+        "wire_model": "claude-fable-5",
+        "max_output_tokens": 64000,
+        "thinking": { "type": "adaptive" },
+        "supports_disabled_thinking": false
+      }
     },
     {
       "slug": "anthropic/claude-opus-5",
@@ -119,7 +130,8 @@
         { "effort": "low", "description": "Lower adaptive thinking effort" },
         { "effort": "medium", "description": "Balanced adaptive thinking effort" },
         { "effort": "high", "description": "Higher adaptive thinking effort" },
-        { "effort": "xhigh", "description": "Maximum adaptive thinking effort" }
+        { "effort": "xhigh", "description": "Extra high adaptive thinking effort" },
+        { "effort": "max", "description": "Maximum adaptive thinking effort" }
       ],
       "priority": 21,
       "context_window": 1000000,
@@ -137,7 +149,17 @@
       "tool_mode": "direct",
       "aliases": ["opus-5"],
       "history_compatibility_group": "anthropic",
-      "multi_agent_version": "v2"
+      "multi_agent_version": "v2",
+      "inference": {
+        "family": "anthropic",
+        "wire_api": "anthropic_messages",
+        "dialect": "claude_code",
+        "route": "claude_code",
+        "wire_model": "claude-opus-5",
+        "max_output_tokens": 64000,
+        "thinking": { "type": "adaptive" },
+        "supports_disabled_thinking": true
+      }
     },
     {
       "slug": "anthropic/claude-opus-4-8",
@@ -151,7 +173,8 @@
         { "effort": "low", "description": "Lower adaptive thinking effort" },
         { "effort": "medium", "description": "Balanced adaptive thinking effort" },
         { "effort": "high", "description": "Higher adaptive thinking effort" },
-        { "effort": "xhigh", "description": "Maximum adaptive thinking effort" }
+        { "effort": "xhigh", "description": "Extra high adaptive thinking effort" },
+        { "effort": "max", "description": "Maximum adaptive thinking effort" }
       ],
       "priority": 22,
       "context_window": 1000000,
@@ -169,7 +192,17 @@
       "tool_mode": "direct",
       "aliases": ["opus-4.8"],
       "history_compatibility_group": "anthropic",
-      "multi_agent_version": "v2"
+      "multi_agent_version": "v2",
+      "inference": {
+        "family": "anthropic",
+        "wire_api": "anthropic_messages",
+        "dialect": "claude_code",
+        "route": "claude_code",
+        "wire_model": "claude-opus-4-8",
+        "max_output_tokens": 64000,
+        "thinking": { "type": "adaptive" },
+        "supports_disabled_thinking": true
+      }
     },
     {
       "slug": "anthropic/claude-sonnet-5",
@@ -183,7 +216,8 @@
         { "effort": "low", "description": "Lower adaptive thinking effort" },
         { "effort": "medium", "description": "Balanced adaptive thinking effort" },
         { "effort": "high", "description": "Higher adaptive thinking effort" },
-        { "effort": "xhigh", "description": "Maximum adaptive thinking effort" }
+        { "effort": "xhigh", "description": "Extra high adaptive thinking effort" },
+        { "effort": "max", "description": "Maximum adaptive thinking effort" }
       ],
       "priority": 23,
       "context_window": 1000000,
@@ -201,7 +235,17 @@
       "tool_mode": "direct",
       "aliases": ["sonnet-5"],
       "history_compatibility_group": "anthropic",
-      "multi_agent_version": "v2"
+      "multi_agent_version": "v2",
+      "inference": {
+        "family": "anthropic",
+        "wire_api": "anthropic_messages",
+        "dialect": "claude_code",
+        "route": "claude_code",
+        "wire_model": "claude-sonnet-5",
+        "max_output_tokens": 64000,
+        "thinking": { "type": "adaptive" },
+        "supports_disabled_thinking": true
+      }
     },
     {
       "slug": "anthropic/claude-haiku-4-5-20251001",
@@ -215,7 +259,8 @@
         { "effort": "low", "description": "Lower reasoning effort" },
         { "effort": "medium", "description": "Balanced reasoning effort" },
         { "effort": "high", "description": "Higher reasoning effort" },
-        { "effort": "xhigh", "description": "Maximum reasoning effort" }
+        { "effort": "xhigh", "description": "Extra high reasoning effort" },
+        { "effort": "max", "description": "Maximum reasoning effort" }
       ],
       "priority": 24,
       "context_window": 200000,
@@ -233,7 +278,17 @@
       "tool_mode": "direct",
       "aliases": ["haiku-4.5"],
       "history_compatibility_group": "anthropic",
-      "multi_agent_version": "v2"
+      "multi_agent_version": "v2",
+      "inference": {
+        "family": "anthropic",
+        "wire_api": "anthropic_messages",
+        "dialect": "claude_code",
+        "route": "claude_code",
+        "wire_model": "claude-haiku-4-5-20251001",
+        "max_output_tokens": 32000,
+        "thinking": { "type": "budgeted", "budget_tokens": 31999 },
+        "supports_disabled_thinking": true
+      }
     },
     {
       "slug": "kimi/k3",
@@ -258,12 +313,21 @@
       "comp_hash": null,
       "experimental_supported_tools": [],
       "supports_search_tool": false,
-      "use_responses_lite": true,
+      "use_responses_lite": false,
       "tool_mode": "direct",
       "aliases": ["k3"],
       "history_compatibility_group": "kimi",
-      "requires_nonempty_assistant_messages": true,
-      "multi_agent_version": "v2"
+      "requires_nonempty_assistant_messages": false,
+      "multi_agent_version": "v2",
+      "inference": {
+        "family": "kimi",
+        "wire_api": "chat_completions",
+        "dialect": "kimi",
+        "route": "kimi_code",
+        "wire_model": "k3",
+        "max_output_tokens": 131072,
+        "thinking": "required_with_effort"
+      }
     },
     {
       "slug": "kimi/k3-256k",
@@ -279,7 +343,7 @@
       "priority": 31,
       "context_window": 262144,
       "max_context_window": 262144,
-      "input_modalities": ["text"],
+      "input_modalities": ["text", "image"],
       "support_verbosity": false,
       "default_verbosity": null,
       "apply_patch_tool_type": null,
@@ -288,23 +352,29 @@
       "comp_hash": null,
       "experimental_supported_tools": [],
       "supports_search_tool": false,
-      "use_responses_lite": true,
+      "use_responses_lite": false,
       "tool_mode": "direct",
       "aliases": ["k3-256k"],
       "history_compatibility_group": "kimi",
-      "requires_nonempty_assistant_messages": true,
-      "multi_agent_version": "v2"
+      "requires_nonempty_assistant_messages": false,
+      "multi_agent_version": "v2",
+      "inference": {
+        "family": "kimi",
+        "wire_api": "chat_completions",
+        "dialect": "kimi",
+        "route": "kimi_code",
+        "wire_model": "k3-256k",
+        "max_output_tokens": 131072,
+        "thinking": "required_with_effort"
+      }
     },
     {
       "slug": "kimi/kimi-for-coding",
       "inherits": "gpt-5.6-sol",
       "display_name": "Kimi K2.7 Coding",
-      "description": "Kimi's coding model with toggleable thinking.",
-      "default_reasoning_level": "on",
-      "supported_reasoning_levels": [
-        { "effort": "none", "description": "Disable thinking" },
-        { "effort": "on", "description": "Enable thinking" }
-      ],
+      "description": "Kimi's coding-specialized model.",
+      "default_reasoning_level": null,
+      "supported_reasoning_levels": [],
       "priority": 32,
       "context_window": 262144,
       "max_context_window": 262144,
@@ -317,23 +387,29 @@
       "comp_hash": null,
       "experimental_supported_tools": [],
       "supports_search_tool": false,
-      "use_responses_lite": true,
+      "use_responses_lite": false,
       "tool_mode": "direct",
       "aliases": ["kimi-2.7", "kimi-for-coding"],
       "history_compatibility_group": "kimi",
-      "requires_nonempty_assistant_messages": true,
-      "multi_agent_version": "v2"
+      "requires_nonempty_assistant_messages": false,
+      "multi_agent_version": "v2",
+      "inference": {
+        "family": "kimi",
+        "wire_api": "chat_completions",
+        "dialect": "kimi",
+        "route": "kimi_code",
+        "wire_model": "kimi-for-coding",
+        "max_output_tokens": 32768,
+        "thinking": "required"
+      }
     },
     {
       "slug": "kimi/kimi-for-coding-highspeed",
       "inherits": "gpt-5.6-sol",
       "display_name": "Kimi K2.7 Coding Highspeed",
-      "description": "Kimi's highspeed coding model with toggleable thinking.",
-      "default_reasoning_level": "on",
-      "supported_reasoning_levels": [
-        { "effort": "none", "description": "Disable thinking" },
-        { "effort": "on", "description": "Enable thinking" }
-      ],
+      "description": "Kimi's low-latency coding-specialized model.",
+      "default_reasoning_level": null,
+      "supported_reasoning_levels": [],
       "priority": 33,
       "context_window": 262144,
       "max_context_window": 262144,
@@ -346,12 +422,21 @@
       "comp_hash": null,
       "experimental_supported_tools": [],
       "supports_search_tool": false,
-      "use_responses_lite": true,
+      "use_responses_lite": false,
       "tool_mode": "direct",
       "aliases": ["kimi-2.7-fast", "kimi-for-coding-highspeed"],
       "history_compatibility_group": "kimi",
-      "requires_nonempty_assistant_messages": true,
-      "multi_agent_version": "v2"
+      "requires_nonempty_assistant_messages": false,
+      "multi_agent_version": "v2",
+      "inference": {
+        "family": "kimi",
+        "wire_api": "chat_completions",
+        "dialect": "kimi",
+        "route": "kimi_code",
+        "wire_model": "kimi-for-coding-highspeed",
+        "max_output_tokens": 32768,
+        "thinking": "required"
+      }
     }
   ]
 }

@@ -27,18 +27,15 @@ import {
 	convertOpenAIChatRequestToAnthropic,
 	convertOpenAIChatRequestToOpenAIResponses,
 	convertOpenAIResponsesRequestToAnthropic,
-	convertOpenAIResponsesRequestToKimiChat,
 	normalizeCodexResponsesRequest,
 } from "./transforms/requests";
 import {
 	transformAnthropicResponseToOpenAIChat,
 	transformAnthropicResponseToOpenAIResponses,
-	transformKimiChatResponseToOpenAIResponses,
 	transformOpenAIChatResponseToAnthropic,
 	transformOpenAIResponsesResponseToAnthropic,
 	transformOpenAIResponsesResponseToOpenAIChat,
 } from "./transforms/responses";
-import { ResponsesToolProjectionError } from "./transforms/responses-tool-projection";
 import type { CompatibilityRouteKind } from "./types";
 
 const log = new Logger("CompatibilityProxy");
@@ -149,7 +146,7 @@ function buildExecutionPlan(
 				};
 			}
 
-			if (actualProvider === "openai" || actualProvider === "kimi") {
+			if (actualProvider === "openai") {
 				return {
 					upstreamPath: "/chat/completions",
 					providerName: actualProvider,
@@ -172,7 +169,7 @@ function buildExecutionPlan(
 			};
 		}
 		case "openai-chat-completions": {
-			if (actualProvider === "openai" || actualProvider === "kimi") {
+			if (actualProvider === "openai") {
 				return {
 					upstreamPath: "/chat/completions",
 					providerName: actualProvider,
@@ -202,18 +199,6 @@ function buildExecutionPlan(
 			};
 		}
 		case "openai-responses": {
-			if (actualProvider === "kimi") {
-				return {
-					upstreamPath: "/chat/completions",
-					providerName: actualProvider,
-					body: convertOpenAIResponsesRequestToKimiChat(
-						requestBody,
-						stripped.model,
-					),
-					transformResponse: (response) =>
-						transformKimiChatResponseToOpenAIResponses(response, requestBody),
-				};
-			}
 			if (actualProvider === "openai" || actualProvider === "codex") {
 				return {
 					upstreamPath: "/responses",
@@ -427,6 +412,15 @@ export async function handleCompatibilityProxy(
 			"Compatibility routes require a non-empty model",
 		);
 	}
+	if (
+		typeof requestBodyJson.model === "string" &&
+		requestBodyJson.model.trim().startsWith("kimi/")
+	) {
+		return buildCompatibilityError(
+			400,
+			"Kimi models are not supported on compatibility routes; use POST /v1/kimi/chat/completions",
+		);
+	}
 
 	const requestMeta = createRequestMetadata(req, url);
 	requestEvents.emit("event", {
@@ -440,25 +434,17 @@ export async function handleCompatibilityProxy(
 		),
 	});
 	for (const actualProvider of COMPAT_PROVIDER_ORDER[model.family]) {
-		let response: Response | null;
-		try {
-			response = await tryProviderFamily({
-				req,
-				url,
-				requestMeta,
-				requestBodyBuffer,
-				requestBodyJson,
-				ctx,
-				actualProvider,
-				route: route.kind,
-				stripped: model,
-			});
-		} catch (error) {
-			if (error instanceof ResponsesToolProjectionError) {
-				return buildCompatibilityError(400, error.message);
-			}
-			throw error;
-		}
+		const response = await tryProviderFamily({
+			req,
+			url,
+			requestMeta,
+			requestBodyBuffer,
+			requestBodyJson,
+			ctx,
+			actualProvider,
+			route: route.kind,
+			stripped: model,
+		});
 		if (response) {
 			return response;
 		}

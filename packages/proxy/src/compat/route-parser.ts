@@ -8,7 +8,6 @@ export const COMPAT_PROVIDER_ORDER: Record<
 > = {
 	openai: ["codex", "openai"],
 	anthropic: ["claude-code", "anthropic"],
-	kimi: ["kimi"],
 };
 
 export type ParsedCompatibilityRoute = {
@@ -21,7 +20,6 @@ export function parseCompatibilityRoute(
 ): ParsedCompatibilityRoute | null {
 	switch (pathname) {
 		case "/v1/ccflare/anthropic/messages":
-		case "/v1/ccflare/anthropic/v1/messages":
 			return { kind: "anthropic-messages", nativeFamily: "anthropic" };
 		case "/v1/ccflare/openai/chat/completions":
 			return { kind: "openai-chat-completions", nativeFamily: "openai" };
