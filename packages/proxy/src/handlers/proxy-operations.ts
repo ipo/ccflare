@@ -9,6 +9,18 @@ import { getValidAccessToken } from "./token-manager";
 
 const log = new Logger("ProxyOperations");
 
+export type ProxyAttemptOutcome =
+	| { kind: "forwarded"; response: Response }
+	| {
+			kind: "rate_limited";
+			response: Response;
+			account: Account;
+			resetTime?: number;
+			upstreamRequestStartedAt: number;
+			responseHeadersReceivedAt: number;
+		}
+	| { kind: "failed" };
+
 /**
  * Handles proxy request without authentication
  * @param req - The incoming request
@@ -84,7 +96,7 @@ export async function proxyUnauthenticated(
  * @param createBodyStream - Function to create body stream
  * @param failoverAttempts - Number of failover attempts
  * @param ctx - The proxy context
- * @returns Promise resolving to response or null if failed
+ * @returns The forwarded response, retained rate-limit attempt, or failure
  */
 export async function proxyWithAccount(
 	req: Request,
@@ -95,7 +107,7 @@ export async function proxyWithAccount(
 	createBodyStream: () => ReadableStream<Uint8Array> | undefined,
 	failoverAttempts: number,
 	ctx: ResolvedProxyContext,
-): Promise<Response | null> {
+): Promise<ProxyAttemptOutcome> {
 	try {
 		log.info(`Attempting request with account: ${account.name}`);
 
@@ -126,13 +138,22 @@ export async function proxyWithAccount(
 		const responseHeadersReceivedAt = Date.now();
 
 		// Process response and check for rate limit
-		const isRateLimited = processProxyResponse(response, account, ctx);
-		if (isRateLimited) {
-			return null; // Signal to try next account
+		const rateLimitInfo = processProxyResponse(response, account, ctx);
+		if (rateLimitInfo) {
+			return {
+				kind: "rate_limited",
+				response,
+				account,
+				resetTime: rateLimitInfo.resetTime,
+				upstreamRequestStartedAt,
+				responseHeadersReceivedAt,
+			};
 		}
 
 		// Forward response to client
-		return forwardToClient(
+		return {
+			kind: "forwarded",
+			response: await forwardToClient(
 			{
 				requestId: requestMeta.id,
 				method: requestMeta.method,
@@ -148,9 +169,10 @@ export async function proxyWithAccount(
 				failoverAttempts,
 			},
 			ctx,
-		);
+			),
+		};
 	} catch (err) {
 		handleProxyError(err, account, log);
-		return null;
+		return { kind: "failed" };
 	}
 }

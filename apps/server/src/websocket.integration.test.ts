@@ -60,6 +60,67 @@ function upgradeTestConnection() {
 }
 
 describe("WebSocket proxy behavior", () => {
+	it("keeps zero-account upgrades as unauthenticated passthrough candidates", () => {
+		const url = new URL("http://localhost:8080/v1/codex/responses");
+		let upgraded = false;
+		const response = handleWebSocketUpgradeRequest(
+			new Request(url, {
+				method: "GET",
+				headers: {
+					connection: "Upgrade",
+					upgrade: "websocket",
+					authorization: "Bearer caller-credential",
+				},
+			}),
+			url,
+			createInMemoryProxyContext([]),
+			{
+				upgrade() {
+					upgraded = true;
+					return true;
+				},
+			} as unknown as Bun.Server<WebSocketProxyData>,
+		);
+
+		expect(response).toBeUndefined();
+		expect(upgraded).toBe(true);
+	});
+
+	it("rejects paused or cooling managed accounts before upgrade", async () => {
+		const url = new URL("http://localhost:8080/v1/codex/responses");
+		const cases = [
+			{ account: { ...createCodexAccount(), paused: true }, status: 503 },
+			{
+				account: {
+					...createCodexAccount(),
+					rate_limited_until: Date.now() + 30_000,
+				},
+				status: 429,
+			},
+		];
+
+		for (const { account, status } of cases) {
+			let upgraded = false;
+			const response = handleWebSocketUpgradeRequest(
+				new Request(url, {
+					method: "GET",
+					headers: { connection: "Upgrade", upgrade: "websocket" },
+				}),
+				url,
+				createInMemoryProxyContext([account]),
+				{
+					upgrade() {
+						upgraded = true;
+						return true;
+					},
+				} as unknown as Bun.Server<WebSocketProxyData>,
+			);
+
+			expect(response?.status).toBe(status);
+			expect(upgraded).toBe(false);
+		}
+	});
+
 	it("prepares websocket upgrades and proxies messages bidirectionally", async () => {
 		globalThis.WebSocket =
 			FakeUpstreamWebSocket as unknown as typeof globalThis.WebSocket;

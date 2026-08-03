@@ -13,6 +13,14 @@ export interface RateLimitInfo {
 	remaining?: number;
 }
 
+export type ProxyErrorKind = "rate_limit" | "service_unavailable";
+
+export interface ProxyErrorResponseOptions {
+	kind: ProxyErrorKind;
+	message: string;
+	retryAfterSeconds?: number;
+}
+
 export type QuotaSourceState = "ok" | "failed";
 export type ProviderQuotaState = "ok" | "partial" | "failed";
 
@@ -114,6 +122,9 @@ export interface Provider {
 	 * Parse rate limit information from response
 	 */
 	parseRateLimit(response: Response): RateLimitInfo;
+
+	/** Build a provider-native response for a proxy-generated error. */
+	buildProxyErrorResponse(options: ProxyErrorResponseOptions): Response;
 
 	/**
 	 * Process the response before returning to client

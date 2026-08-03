@@ -100,7 +100,7 @@ describe("processProxyResponse", () => {
 		);
 		flush();
 
-		expect(isRateLimited).toBe(false);
+		expect(isRateLimited).toBeNull();
 		expect(calls).toEqual(["updateAccountRateLimitMeta"]);
 	});
 
@@ -120,7 +120,7 @@ describe("processProxyResponse", () => {
 		);
 		flush();
 
-		expect(isRateLimited).toBe(true);
+		expect(isRateLimited).toMatchObject({ isRateLimited: true });
 		expect(calls).toEqual([
 			"markAccountRateLimited",
 			"updateAccountRateLimitMeta",
@@ -144,7 +144,7 @@ describe("processProxyResponse", () => {
 		);
 		flush();
 
-		expect(isRateLimited).toBe(true);
+		expect(isRateLimited).toMatchObject({ isRateLimited: true });
 		expect(calls).toEqual(["updateAccountRateLimitMeta"]);
 	});
 });

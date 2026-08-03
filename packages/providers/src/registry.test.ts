@@ -26,6 +26,16 @@ function createTestProvider(name: string): Provider {
 		parseRateLimit(): RateLimitInfo {
 			return { isRateLimited: false };
 		},
+		buildProxyErrorResponse({ kind, message, retryAfterSeconds }) {
+			const headers = new Headers({ "content-type": "application/json" });
+			if (retryAfterSeconds !== undefined) {
+				headers.set("retry-after", String(retryAfterSeconds));
+			}
+			return new Response(message, {
+				status: kind === "rate_limit" ? 429 : 503,
+				headers,
+			});
+		},
 		async processResponse(response: Response): Promise<Response> {
 			return response;
 		},

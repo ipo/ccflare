@@ -1,6 +1,10 @@
 import { sanitizeProxyHeaders } from "@ccflare/http";
 import { type Account, CCFLARE_SESSION_ID_HEADER } from "@ccflare/types";
-import type { Provider, RateLimitInfo } from "./types";
+import type {
+	Provider,
+	ProxyErrorResponseOptions,
+	RateLimitInfo,
+} from "./types";
 
 /**
  * Headers that are provider-neutral transport artifacts and should always be
@@ -104,6 +108,29 @@ export abstract class BaseProvider implements Provider {
 		}
 
 		return { isRateLimited: true, resetTime };
+	}
+
+	/**
+	 * The default synthetic envelope is OpenAI-compatible. Anthropic-family
+	 * providers override this with their native error shape.
+	 */
+	buildProxyErrorResponse(options: ProxyErrorResponseOptions): Response {
+		const isRateLimit = options.kind === "rate_limit";
+		const headers = new Headers({ "content-type": "application/json" });
+		if (options.retryAfterSeconds !== undefined) {
+			headers.set("retry-after", String(options.retryAfterSeconds));
+		}
+
+		return new Response(
+			JSON.stringify({
+				error: {
+					message: options.message,
+					type: isRateLimit ? "rate_limit_error" : "server_error",
+					code: isRateLimit ? "rate_limit_exceeded" : null,
+				},
+			}),
+			{ status: isRateLimit ? 429 : 503, headers },
+		);
 	}
 
 	/**

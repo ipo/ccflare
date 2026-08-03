@@ -5,7 +5,7 @@ import {
 	isRecord,
 } from "@ccflare/types";
 import { BaseProvider, deleteTransportHeaders } from "../../base";
-import type { RateLimitInfo } from "../../types";
+import type { ProxyErrorResponseOptions, RateLimitInfo } from "../../types";
 
 // Hard rate limit statuses that should block account usage
 const HARD_LIMIT_STATUSES = new Set([
@@ -138,6 +138,25 @@ export class AnthropicProvider extends BaseProvider {
 			isRateLimited: true,
 			resetTime,
 		};
+	}
+
+	buildProxyErrorResponse(options: ProxyErrorResponseOptions): Response {
+		const isRateLimit = options.kind === "rate_limit";
+		const headers = new Headers({ "content-type": "application/json" });
+		if (options.retryAfterSeconds !== undefined) {
+			headers.set("retry-after", String(options.retryAfterSeconds));
+		}
+
+		return new Response(
+			JSON.stringify({
+				type: "error",
+				error: {
+					type: isRateLimit ? "rate_limit_error" : "overloaded_error",
+					message: options.message,
+				},
+			}),
+			{ status: isRateLimit ? 429 : 503, headers },
+		);
 	}
 
 	async extractUsageInfo(response: Response): Promise<{

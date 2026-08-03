@@ -49,6 +49,7 @@ type RequestSummaryResponse = Array<{
 	id: string;
 	path: string;
 	provider?: string;
+	statusCode?: number | null;
 	accountUsed?: string | null;
 	accountName?: string | null;
 	failoverAttempts?: number;
@@ -434,6 +435,22 @@ describe("Anthropic passthrough integration", () => {
 								headers: {
 									"content-type": "application/json",
 								},
+							},
+						);
+					}
+
+					if (body?.includes('"rate-limit-regression"')) {
+						return new Response(
+							JSON.stringify({
+								type: "error",
+								error: {
+									type: "rate_limit_error",
+									message: "managed account exhausted",
+								},
+							}),
+							{
+								status: 429,
+								headers: { "content-type": "application/json" },
 							},
 						);
 					}
@@ -1725,6 +1742,73 @@ describe("Anthropic passthrough integration", () => {
 
 		await pauseAccount(exhaustPrimaryAccountId);
 		await pauseAccount(exhaustSecondaryAccountId);
+
+		const rateLimitedUpstreamStart = upstreamRequests.length;
+		const retainedRateLimitResponse = await runCurl([
+			"-X",
+			"POST",
+			`${SERVER_URL}/v1/anthropic/v1/messages`,
+			"-H",
+			"content-type: application/json",
+			"-H",
+			"x-api-key: caller-credential",
+			"--data",
+			JSON.stringify({
+				model: "rate-limit-regression",
+				max_tokens: 1,
+				messages: [],
+			}),
+		]);
+		expect(retainedRateLimitResponse.status).toBe(429);
+		expect(retainedRateLimitResponse.headers.get("retry-after")).toBe("60");
+		expect(JSON.parse(retainedRateLimitResponse.body)).toEqual({
+			type: "error",
+			error: {
+				type: "rate_limit_error",
+				message: "managed account exhausted",
+			},
+		});
+		expect(upstreamRequests.slice(rateLimitedUpstreamStart)).toEqual([
+			expect.objectContaining({
+				url: "https://api.anthropic.com/v1/messages",
+				headers: expect.objectContaining({ "x-api-key": "sk-ant-test" }),
+			}),
+		]);
+
+		const persistedRateLimit = await waitFor(
+			() => readJson<RequestSummaryResponse>("/api/requests?limit=50"),
+			(requests) =>
+				requests.some(
+					(request) =>
+						request.path === "/v1/anthropic/v1/messages" &&
+						request.accountUsed === createdAccountId &&
+						request.statusCode === 429,
+				),
+		);
+		const persistedRateLimitId = persistedRateLimit.find(
+			(request) =>
+				request.path === "/v1/anthropic/v1/messages" &&
+				request.accountUsed === createdAccountId &&
+				request.statusCode === 429,
+		)?.id;
+		expect(persistedRateLimitId).toBeTruthy();
+		const persistedRateLimitDetail = await readJson<{
+			response: { status: number; body: string | null } | null;
+			meta: { account: { id: string | null }; trace: { provider: string; path: string } };
+		}>(`/api/requests/${persistedRateLimitId}/detail`);
+		expect(persistedRateLimitDetail).toMatchObject({
+			response: {
+				status: 429,
+				body: retainedRateLimitResponse.body,
+			},
+			meta: {
+				account: { id: createdAccountId },
+				trace: {
+					provider: "anthropic",
+					path: "/v1/anthropic/v1/messages",
+				},
+			},
+		});
 
 		const deleteResponse = await runCurl([
 			"-X",

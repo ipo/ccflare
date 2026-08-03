@@ -67,14 +67,14 @@ export function updateAccountMetadata(
  * @param response - The provider response
  * @param account - The account used
  * @param ctx - The proxy context
- * @returns Whether the response is rate-limited
+ * @returns The parsed rate-limit data, when the response is rate-limited
  */
 export function processProxyResponse(
 	response: Response,
 	account: Account,
 	ctx: ResolvedProxyContext,
 	options?: { skipAccountRateLimitMark?: boolean },
-): boolean {
+): RateLimitInfo | null {
 	const isStream = ctx.provider.isStreamingResponse?.(response) ?? false;
 	// Parse rate-limit headers once and pass the result through
 	const rateLimitInfo = ctx.provider.parseRateLimit(response);
@@ -87,12 +87,12 @@ export function processProxyResponse(
 			handleRateLimitResponse(account, rateLimitInfo, ctx);
 		}
 		updateAccountMetadata(account, rateLimitInfo, ctx);
-		return true; // Signal rate limit
+		return rateLimitInfo;
 	}
 
 	// Update account metadata in background
 	updateAccountMetadata(account, rateLimitInfo, ctx);
-	return false;
+	return null;
 }
 
 /**

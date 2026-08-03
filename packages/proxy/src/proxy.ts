@@ -8,13 +8,15 @@ import {
 	createRequestMetadata,
 	ERROR_MESSAGES,
 	type ProxyContext,
+	type ProxyAttemptOutcome,
+	getAccountAvailability,
 	prepareRequestBody,
 	proxyUnauthenticated,
 	proxyWithAccount,
 	resolveProxyContext,
-	selectAccountsForRequest,
 	TIMING,
 } from "./handlers";
+import { forwardToClient } from "./response-handler";
 import {
 	UsageWorkerController,
 	type UsageWorkerHealthSnapshot,
@@ -24,6 +26,24 @@ import {
 export type { ProxyContext } from "./handlers";
 
 const log = new Logger("Proxy");
+
+function retryAfterSeconds(retryAt: number): number {
+	return Math.max(1, Math.ceil((retryAt - Date.now()) / 1000));
+}
+
+function withDerivedRetryAfter(response: Response, retryAt?: number): Response {
+	if (response.headers.has("retry-after") || retryAt === undefined) {
+		return response;
+	}
+
+	const headers = new Headers(response.headers);
+	headers.set("retry-after", String(retryAfterSeconds(retryAt)));
+	return new Response(response.body, {
+		status: response.status,
+		statusText: response.statusText,
+		headers,
+	});
+}
 
 let usageWorkerInstance: UsageWorkerController | null = null;
 
@@ -125,11 +145,9 @@ export async function handleProxy(
 	// 2. Prepare request body
 	const { buffer: requestBodyBuffer } = await prepareRequestBody(req);
 
-	// 3. Select accounts
-	const accounts = selectAccountsForRequest(requestMeta, requestContext);
-
-	// 4. Handle no accounts case
-	if (accounts.length === 0) {
+	// 3. An empty candidate set is not itself permission to use caller auth.
+	const availability = getAccountAvailability(requestMeta, requestContext);
+	if (availability.kind === "no_configured_accounts") {
 		return proxyUnauthenticated(
 			req,
 			url,
@@ -142,6 +160,37 @@ export async function handleProxy(
 			requestContext,
 		);
 	}
+	if (availability.kind === "cooling_down" || availability.kind === "unavailable") {
+		const coolingDown = availability.kind === "cooling_down";
+		return forwardToClient(
+			{
+				requestId: requestMeta.id,
+				method: requestMeta.method,
+				path: url.pathname,
+				account: null,
+				requestHeaders: req.headers,
+				requestBody: requestBodyBuffer,
+				response: requestContext.provider.buildProxyErrorResponse({
+					kind: coolingDown ? "rate_limit" : "service_unavailable",
+					message: coolingDown
+						? "All managed accounts are rate limited"
+						: "Managed accounts are unavailable",
+					retryAfterSeconds: coolingDown
+						? retryAfterSeconds(availability.retryAt)
+						: undefined,
+				}),
+				timestamp: requestMeta.timestamp,
+				retryAttempt: 0,
+				failoverAttempts: 0,
+			},
+			requestContext,
+		);
+	}
+
+	const accounts = availability.accounts;
+	const rateLimitedAttempts: Array<
+		Extract<ProxyAttemptOutcome, { kind: "rate_limited" }>
+	> = [];
 
 	// 5. Log selected accounts
 	log.info(
@@ -151,7 +200,7 @@ export async function handleProxy(
 
 	// 6. Try each account
 	for (let i = 0; i < accounts.length; i++) {
-		const response = await proxyWithAccount(
+		const outcome = await proxyWithAccount(
 			req,
 			url,
 			accounts[i],
@@ -165,12 +214,45 @@ export async function handleProxy(
 			requestContext,
 		);
 
-		if (response) {
-			return response;
+		if (outcome.kind === "forwarded") {
+			return outcome.response;
+		}
+		if (outcome.kind === "rate_limited") {
+			rateLimitedAttempts.push(outcome);
 		}
 	}
 
-	// 7. All accounts failed
+	if (rateLimitedAttempts.length > 0) {
+		const retained = rateLimitedAttempts[0];
+		const earliestReset = rateLimitedAttempts.reduce<number | undefined>(
+			(earliest, attempt) =>
+				attempt.resetTime === undefined
+					? earliest
+					: earliest === undefined
+						? attempt.resetTime
+						: Math.min(earliest, attempt.resetTime),
+			undefined,
+		);
+		return forwardToClient(
+			{
+				requestId: requestMeta.id,
+				method: requestMeta.method,
+				path: url.pathname,
+				account: retained.account,
+				requestHeaders: req.headers,
+				requestBody: requestBodyBuffer,
+				response: withDerivedRetryAfter(retained.response, earliestReset),
+				timestamp: requestMeta.timestamp,
+				upstreamRequestStartedAt: retained.upstreamRequestStartedAt,
+				responseHeadersReceivedAt: retained.responseHeadersReceivedAt,
+				retryAttempt: 0,
+				failoverAttempts: accounts.length - 1,
+			},
+			requestContext,
+		);
+	}
+
+	// 7. All managed attempts failed without a rate-limit response.
 	throw new ServiceUnavailableError(
 		`${ERROR_MESSAGES.ALL_ACCOUNTS_FAILED} (${accounts.length} attempted)`,
 		requestContext.providerName,

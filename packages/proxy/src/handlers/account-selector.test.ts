@@ -1,6 +1,9 @@
 import { describe, expect, it } from "bun:test";
 import type { Account, AccountProvider, RequestMeta } from "@ccflare/types";
-import { selectAccountsForRequest } from "./account-selector";
+import {
+	getAccountAvailability,
+	selectAccountsForRequest,
+} from "./account-selector";
 import type { ResolvedProxyContext } from "./proxy-types";
 
 function createAccount(
@@ -101,5 +104,42 @@ describe("selectAccountsForRequest", () => {
 			{ includeRateLimited: false },
 			{ includeRateLimited: false },
 		]);
+	});
+
+	it("distinguishes no configured accounts from managed cooldowns and pauses", () => {
+		const meta: RequestMeta = {
+			id: "request-3",
+			method: "POST",
+			path: "/v1/anthropic/v1/messages",
+			timestamp: Date.now(),
+		};
+		const now = Date.now();
+		const makeContext = (accounts: Account[]) =>
+			({
+				providerName: "anthropic",
+				strategy: { select: () => [] },
+				dbOps: {
+					getAccountsByProvider: () => accounts,
+					getAvailableAccountsByProvider: () => [],
+				},
+			}) as unknown as ResolvedProxyContext;
+
+		expect(getAccountAvailability(meta, makeContext([]))).toEqual({
+			kind: "no_configured_accounts",
+		});
+		expect(
+			getAccountAvailability(
+				meta,
+				makeContext([
+					{ ...createAccount("a1", "cooling", "anthropic"), rate_limited_until: now + 60_000 },
+					{ ...createAccount("a2", "later", "anthropic"), rate_limited_until: now + 120_000 },
+				]),
+			),
+		).toEqual({ kind: "cooling_down", retryAt: now + 60_000 });
+		expect(
+			getAccountAvailability(meta, makeContext([
+				{ ...createAccount("a3", "paused", "anthropic"), paused: true },
+			])),
+		).toEqual({ kind: "unavailable" });
 	});
 });

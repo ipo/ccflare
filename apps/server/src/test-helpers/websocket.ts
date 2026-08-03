@@ -283,7 +283,11 @@ export function createInMemoryProxyContext(
 			},
 			getAvailableAccountsByProvider(provider: Account["provider"]) {
 				return accounts.filter(
-					(account) => account.provider === provider && !account.paused,
+					(account) =>
+						account.provider === provider &&
+						!account.paused &&
+						(account.rate_limited_until === null ||
+							account.rate_limited_until < Date.now()),
 				);
 			},
 			saveRequestMeta() {},

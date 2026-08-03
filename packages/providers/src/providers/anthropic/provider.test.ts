@@ -90,4 +90,31 @@ describe("AnthropicProvider", () => {
 			remaining: 17,
 		});
 	});
+
+	it("builds native synthetic rate-limit and unavailable errors", async () => {
+		const rateLimit = provider.buildProxyErrorResponse({
+			kind: "rate_limit",
+			message: "try later",
+			retryAfterSeconds: 12,
+		});
+		expect(rateLimit.status).toBe(429);
+		expect(rateLimit.headers.get("retry-after")).toBe("12");
+		expect(await rateLimit.json()).toEqual({
+			type: "error",
+			error: { type: "rate_limit_error", message: "try later" },
+		});
+
+		const unavailable = provider.buildProxyErrorResponse({
+			kind: "service_unavailable",
+			message: "managed accounts unavailable",
+		});
+		expect(unavailable.status).toBe(503);
+		expect(await unavailable.json()).toEqual({
+			type: "error",
+			error: {
+				type: "overloaded_error",
+				message: "managed accounts unavailable",
+			},
+		});
+	});
 });

@@ -109,6 +109,36 @@ describe("OpenAIProvider", () => {
 		});
 	});
 
+	it("builds OpenAI-compatible synthetic rate-limit and unavailable errors", async () => {
+		const rateLimit = provider.buildProxyErrorResponse({
+			kind: "rate_limit",
+			message: "try later",
+			retryAfterSeconds: 12,
+		});
+		expect(rateLimit.status).toBe(429);
+		expect(rateLimit.headers.get("retry-after")).toBe("12");
+		expect(await rateLimit.json()).toEqual({
+			error: {
+				message: "try later",
+				type: "rate_limit_error",
+				code: "rate_limit_exceeded",
+			},
+		});
+
+		const unavailable = provider.buildProxyErrorResponse({
+			kind: "service_unavailable",
+			message: "managed accounts unavailable",
+		});
+		expect(unavailable.status).toBe(503);
+		expect(await unavailable.json()).toEqual({
+			error: {
+				message: "managed accounts unavailable",
+				type: "server_error",
+				code: null,
+			},
+		});
+	});
+
 	it("extracts usage from non-streaming JSON responses", async () => {
 		const response = new Response(
 			JSON.stringify({

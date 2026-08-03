@@ -7,7 +7,7 @@ import {
 	toRequestSummary,
 } from "@ccflare/types";
 import { trackProxyBackgroundTask } from "./background-tasks";
-import { selectAccountsForRequest } from "./handlers/account-selector";
+import { getAccountAvailability } from "./handlers/account-selector";
 import type {
 	ProxyContext,
 	ResolvedProxyContext,
@@ -679,7 +679,25 @@ export function handleWebSocketUpgradeRequest(
 	}
 
 	const requestMeta = createRequestMetadata(req, url);
-	const accounts = selectAccountsForRequest(requestMeta, requestContext);
+	const availability = getAccountAvailability(requestMeta, requestContext);
+	if (availability.kind === "cooling_down") {
+		return requestContext.provider.buildProxyErrorResponse({
+			kind: "rate_limit",
+			message: "All managed accounts are rate limited",
+			retryAfterSeconds: Math.max(
+				1,
+				Math.ceil((availability.retryAt - Date.now()) / 1000),
+			),
+		});
+	}
+	if (availability.kind === "unavailable") {
+		return requestContext.provider.buildProxyErrorResponse({
+			kind: "service_unavailable",
+			message: "Managed accounts are unavailable",
+		});
+	}
+	const accounts =
+		availability.kind === "managed_candidates" ? availability.accounts : [];
 	const protocols = getProtocols(req.headers);
 	const sessionId = crypto.randomUUID();
 	const session: WebSocketProxySession = {
@@ -694,7 +712,8 @@ export function handleWebSocketUpgradeRequest(
 			sanitizeRequestHeaders(req.headers).entries(),
 		),
 		requestContext,
-		candidateAccounts: accounts.length > 0 ? accounts : [null],
+		candidateAccounts:
+			availability.kind === "no_configured_accounts" ? [null] : accounts,
 		nextAccountIndex: 0,
 		pendingMessages: [],
 		upstream: null,

@@ -1,5 +1,13 @@
-export { selectAccountsForRequest } from "./account-selector";
-export { proxyUnauthenticated, proxyWithAccount } from "./proxy-operations";
+export {
+	getAccountAvailability,
+	selectAccountsForRequest,
+	type AccountAvailability,
+} from "./account-selector";
+export {
+	proxyUnauthenticated,
+	proxyWithAccount,
+	type ProxyAttemptOutcome,
+} from "./proxy-operations";
 export {
 	ERROR_MESSAGES,
 	type ProxyContext,
