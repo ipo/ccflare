@@ -207,7 +207,8 @@ List all configured accounts with their current status.
       "active": true,
       "startedAt": "2024-12-17T10:00:00.000Z",
       "requestCount": 25
-    }
+    },
+    "quota": null
   }
 ]
 ```
@@ -228,6 +229,7 @@ Supported providers:
 
 - `claude-code` — collects Anthropic OAuth usage and profile data
 - `codex` — collects ChatGPT usage, account-check, and reset-credit data
+- `kimi` — collects Kimi Coding usage limits
 
 The large Codex profile-history probe is intentionally omitted because it does
 not provide current quota windows.
@@ -248,6 +250,15 @@ included in the API response.
   },
   "state": "ok",
   "collectedAt": "2026-07-25T08:30:00.000Z",
+  "windows": [
+    {
+      "id": "claude-code:account:5h",
+      "label": "5-hour limit",
+      "period": "5h",
+      "scope": "account",
+      "usedPercent": 31
+    }
+  ],
   "sources": {
     "usage": {
       "state": "ok",
@@ -286,14 +297,27 @@ subscription information. Because the management API itself has no
 authentication, do not expose it to untrusted networks without an
 authentication layer.
 
-Quota windows change slowly. Poll no more often than every 5 minutes; every
-15 minutes is the recommended normal interval.
+`windows` is an additive normalized projection used by the dashboard. Raw
+provider data remains in `sources`; malformed provider fields are ignored per
+window. Requests with usable normalized windows persist the latest snapshot for
+`GET /api/accounts`. Failed or unparseable refreshes retain the last successful
+windows as stale.
+
+The server refreshes every supported account after listening and once per
+hour. Callers may still use this endpoint for an immediate refresh.
 
 **Example:**
 
 ```bash
 curl http://localhost:8080/api/accounts/uuid-here/quota
 ```
+
+#### POST /api/accounts/:accountId/rate-limit/reset
+
+Clear the selected account's local rate-limit gate and associated status,
+reset, and remaining metadata. This does not change upstream quota or the
+cached quota snapshot. A later provider response can immediately mark the
+account as rate limited again. Unknown account IDs return `404`.
 
 #### GET /api/accounts/:accountId/models
 

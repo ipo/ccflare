@@ -282,9 +282,18 @@ export class AccountRepository extends BaseRepository<Account> {
 	}
 
 	clearRateLimited(accountId: string): void {
-		this.run(`UPDATE accounts SET rate_limited_until = NULL WHERE id = ?`, [
-			accountId,
-		]);
+		this.run(
+			`
+				UPDATE accounts
+				SET
+					rate_limited_until = NULL,
+					rate_limit_status = NULL,
+					rate_limit_reset = NULL,
+					rate_limit_remaining = NULL
+				WHERE id = ?
+			`,
+			[accountId],
+		);
 	}
 
 	updateRateLimitMeta(

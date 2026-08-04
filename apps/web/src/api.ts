@@ -1,4 +1,4 @@
-import type { AccountResponse } from "@ccflare/api";
+import type { AccountQuotaResponse, AccountResponse } from "@ccflare/api";
 import { HttpClient, HttpError } from "@ccflare/http";
 import type {
 	AccountCreateData,
@@ -43,6 +43,25 @@ class API extends HttpClient {
 
 	async getAccounts(): Promise<AccountResponse[]> {
 		return this.getJson<AccountResponse[]>("/api/accounts");
+	}
+
+	async getAccountQuota(accountId: string): Promise<AccountQuotaResponse> {
+		return this.getJson<AccountQuotaResponse>(
+			`/api/accounts/${encodeURIComponent(accountId)}/quota`,
+		);
+	}
+
+	async resetAccountRateLimit(accountId: string): Promise<void> {
+		try {
+			await this.postJson(
+				`/api/accounts/${encodeURIComponent(accountId)}/rate-limit/reset`,
+			);
+		} catch (error) {
+			if (error instanceof HttpError) {
+				throw new Error(error.message);
+			}
+			throw error;
+		}
 	}
 
 	async createApiKeyAccount(data: {

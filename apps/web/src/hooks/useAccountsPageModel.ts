@@ -4,7 +4,12 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { api } from "../api";
 import { queryKeys } from "../lib/query-keys";
-import { useAccounts, useRenameAccount } from "./queries";
+import {
+	useAccountQuotaSnapshots,
+	useAccounts,
+	useRenameAccount,
+	useResetAccountRateLimit,
+} from "./queries";
 import { useApiError } from "./useApiError";
 
 /**
@@ -21,7 +26,9 @@ export function useAccountsPageModel() {
 		isLoading: loading,
 		error: queryError,
 	} = useAccounts();
+	const accountsWithQuota = useAccountQuotaSnapshots(accounts);
 	const renameAccountMutation = useRenameAccount();
+	const resetRateLimitMutation = useResetAccountRateLimit();
 
 	const [actionError, setActionError] = useState<string | null>(null);
 
@@ -118,13 +125,22 @@ export function useAccountsPageModel() {
 		onError: (err) => setActionError(formatError(err)),
 	});
 
+	const resetRateLimit = async (accountId: string) => {
+		try {
+			await resetRateLimitMutation.mutateAsync(accountId);
+			setActionError(null);
+		} catch (err) {
+			setActionError(formatError(err));
+		}
+	};
+
 	// -- Computed --
 
 	const displayError = queryError ? formatError(queryError) : actionError;
 
 	return {
 		// Data
-		accounts,
+		accounts: accountsWithQuota,
 		loading,
 		error: displayError,
 
@@ -137,6 +153,10 @@ export function useAccountsPageModel() {
 		removeAccount: (accountId: string) => removeAccount.mutateAsync(accountId),
 		renameAccount,
 		togglePause: (account: AccountResponse) => togglePause.mutateAsync(account),
+		resetRateLimit,
+		resettingRateLimitAccountId: resetRateLimitMutation.isPending
+			? resetRateLimitMutation.variables
+			: null,
 		isRenaming: renameAccountMutation.isPending,
 		clearError: () => setActionError(null),
 	};

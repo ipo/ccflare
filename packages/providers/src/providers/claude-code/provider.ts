@@ -2,6 +2,7 @@ import { Logger } from "@ccflare/logger";
 import { type Account, getProviderDefaultBaseUrl } from "@ccflare/types";
 import { deleteTransportHeaders } from "../../base";
 import { collectQuotaSources } from "../../quota";
+import { normalizeQuotaWindows } from "../../quota-normalization";
 import {
 	executeTokenRefresh,
 	type RefreshRequestConfig,
@@ -49,12 +50,14 @@ export class ClaudeCodeProvider extends AnthropicProvider {
 	async refreshToken(
 		account: Account,
 		clientId: string,
+		signal?: AbortSignal,
 	): Promise<TokenRefreshResult> {
 		return executeTokenRefresh(
 			account,
 			clientId,
 			CLAUDE_CODE_REFRESH_CONFIG,
 			log,
+			signal,
 		);
 	}
 
@@ -80,7 +83,7 @@ export class ClaudeCodeProvider extends AnthropicProvider {
 			"User-Agent": `claude-cli/${CLAUDE_CODE_CLIENT_VERSION} (external, cli)`,
 		};
 
-		return collectQuotaSources(
+		const report = await collectQuotaSources(
 			[
 				{ name: "usage", url: `${baseUrl}/api/oauth/usage` },
 				{ name: "profile", url: `${baseUrl}/api/oauth/profile` },
@@ -89,6 +92,10 @@ export class ClaudeCodeProvider extends AnthropicProvider {
 			fetchFn,
 			[account.access_token],
 		);
+		return {
+			...report,
+			windows: normalizeQuotaWindows(PROVIDER_NAME, report),
+		};
 	}
 
 	prepareHeaders(headers: Headers, account: Account | null): Headers {

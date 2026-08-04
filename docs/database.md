@@ -7,6 +7,7 @@ ccflare uses SQLite as its only runtime datastore.
 The database layer stores:
 
 - configured accounts and account state
+- latest per-account quota snapshots
 - request summaries
 - full request/response payload documents
 - short-lived OAuth auth sessions
@@ -95,7 +96,17 @@ erDiagram
         TEXT expires_at
     }
 
+    account_quota_snapshots {
+        TEXT account_id PK,FK
+        TEXT state
+        TEXT windows_json
+        TEXT collected_at
+        TEXT last_attempt_at
+        TEXT error
+    }
+
     accounts ||--o{ requests : "handles"
+    accounts ||--o| account_quota_snapshots : "has latest quota"
     websocket_transcript_chunks {
         TEXT request_id FK
         INTEGER chunk_sequence
@@ -143,6 +154,14 @@ Important fields:
 - `response_id`, `previous_response_id`, `response_chain_id`: track Responses API lineage without overloading session-level concepts
 - `client_session_id`: stores provider/client session correlation from a client-supplied session header -- ccflare's own `x-ccflare-session-id` (preferred) or Claude Code's `x-claude-code-session-id` (fallback); ccflare consumes both but never forwards `x-ccflare-session-id` upstream
 
+### `account_quota_snapshots`
+
+Stores only the latest normalized quota windows for each account. Successful
+refreshes replace the snapshot. A later failure retains the last good windows
+with `state = stale`; an account with no successful snapshot uses `error`.
+Deleting an account cascades to its snapshot. Raw provider payloads are not
+stored here.
+
 ### `request_payloads`
 
 Stores serialized request/response payload documents keyed by request id.
@@ -170,6 +189,7 @@ Important notes:
 The active repositories are:
 
 - `AccountRepository`
+- `AccountQuotaSnapshotRepository`
 - `RequestRepository`
 - `AuthSessionRepository`
 - `AnalyticsRepository`

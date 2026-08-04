@@ -8,6 +8,7 @@ export * from "./models";
 export * from "./oauth";
 export * from "./providers/index";
 export * from "./quota";
+export * from "./quota-normalization";
 // Export registry functions
 export {
 	createProviderRegistry,

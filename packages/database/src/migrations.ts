@@ -589,6 +589,28 @@ function ensureAuthSessionsTable(
 	);
 }
 
+function ensureAccountQuotaSnapshotsTable(
+	db: Database,
+	progress: MigrationProgress,
+): void {
+	ensureTable(
+		db,
+		progress,
+		"account_quota_snapshots",
+		`
+		CREATE TABLE IF NOT EXISTS account_quota_snapshots (
+			account_id TEXT PRIMARY KEY,
+			state TEXT NOT NULL CHECK (state IN ('fresh', 'stale', 'error')),
+			windows_json TEXT,
+			collected_at TEXT,
+			last_attempt_at TEXT NOT NULL,
+			error TEXT,
+			FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
+		)
+	`,
+	);
+}
+
 function remediateDuplicateAccountNames(db: Database): void {
 	const accounts = db
 		.query<AccountNameRow, []>(
@@ -956,6 +978,7 @@ export function runMigrations(db: Database): void {
 		dropSchemaObject(db, progress, "index", "idx_oauth_sessions_expires");
 		ensureAuthSessionsTable(db, progress);
 		ensureAccountsNameUniqueness(db, progress);
+		ensureAccountQuotaSnapshotsTable(db, progress);
 		ensureWebSocketTranscriptTable(db, progress);
 
 		ensureIndex(

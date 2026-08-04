@@ -2,6 +2,7 @@ import { Logger } from "@ccflare/logger";
 import { type Account, getProviderDefaultBaseUrl } from "@ccflare/types";
 import { deleteTransportHeaders } from "../../base";
 import { collectQuotaSources } from "../../quota";
+import { normalizeQuotaWindows } from "../../quota-normalization";
 import {
 	executeTokenRefresh,
 	type RefreshRequestConfig,
@@ -60,8 +61,15 @@ export class KimiProvider extends OpenAIProvider {
 	async refreshToken(
 		account: Account,
 		clientId: string,
+		signal?: AbortSignal,
 	): Promise<TokenRefreshResult> {
-		return executeTokenRefresh(account, clientId, KIMI_REFRESH_CONFIG, log);
+		return executeTokenRefresh(
+			account,
+			clientId,
+			KIMI_REFRESH_CONFIG,
+			log,
+			signal,
+		);
 	}
 
 	/**
@@ -84,7 +92,7 @@ export class KimiProvider extends OpenAIProvider {
 			/\/+$/,
 			"",
 		);
-		return collectQuotaSources(
+		const report = await collectQuotaSources(
 			[{ name: "usage", url: `${baseUrl}/usages` }],
 			{
 				Authorization: `Bearer ${account.access_token}`,
@@ -93,6 +101,10 @@ export class KimiProvider extends OpenAIProvider {
 			fetchFn,
 			[account.access_token],
 		);
+		return {
+			...report,
+			windows: normalizeQuotaWindows(PROVIDER_NAME, report),
+		};
 	}
 
 	prepareHeaders(headers: Headers, account: Account | null): Headers {

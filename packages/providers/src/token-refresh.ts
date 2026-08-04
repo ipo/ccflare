@@ -2,6 +2,8 @@ import type { Logger } from "@ccflare/logger";
 import type { Account } from "@ccflare/types";
 import type { TokenRefreshResult } from "./types";
 
+const TOKEN_REFRESH_TIMEOUT_MS = 15_000;
+
 /**
  * Provider-specific configuration for building a token refresh request.
  */
@@ -37,17 +39,20 @@ export async function executeTokenRefresh(
 	clientId: string,
 	config: RefreshRequestConfig,
 	log: Logger,
+	signal?: AbortSignal,
 ): Promise<TokenRefreshResult> {
 	if (!account.refresh_token) {
 		throw new Error(`No refresh token available for account ${account.name}`);
 	}
 
+	const timeoutSignal = AbortSignal.timeout(TOKEN_REFRESH_TIMEOUT_MS);
 	const response = await fetch(config.tokenUrl, {
 		method: "POST",
 		headers: {
 			"Content-Type": config.contentType,
 		},
 		body: config.buildBody(account.refresh_token, clientId),
+		signal: signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal,
 	});
 
 	if (!response.ok) {

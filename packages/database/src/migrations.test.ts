@@ -373,6 +373,75 @@ describe("database schema", () => {
 		}
 	});
 
+	it("creates idempotent account quota snapshots with cascading account deletion", () => {
+		const db = new Database(":memory:");
+		db.exec("PRAGMA foreign_keys = ON");
+
+		try {
+			runMigrations(db);
+			runMigrations(db);
+
+			const columns = getTableColumns(db, "account_quota_snapshots");
+			expect(columns.map((column) => column.name)).toEqual([
+				"account_id",
+				"state",
+				"windows_json",
+				"collected_at",
+				"last_attempt_at",
+				"error",
+			]);
+			expect(columns.find((column) => column.name === "account_id")).toEqual(
+				expect.objectContaining({ type: "TEXT", pk: 1 }),
+			);
+			expect(
+				columns.find((column) => column.name === "last_attempt_at"),
+			).toEqual(expect.objectContaining({ type: "TEXT", notnull: 1 }));
+
+			const foreignKeys = db
+				.query("PRAGMA foreign_key_list(account_quota_snapshots)")
+				.all() as Array<{
+				table: string;
+				from: string;
+				to: string;
+				on_delete: string;
+			}>;
+			expect(foreignKeys).toContainEqual(
+				expect.objectContaining({
+					table: "accounts",
+					from: "account_id",
+					to: "id",
+					on_delete: "CASCADE",
+				}),
+			);
+
+			db.run(
+				`
+					INSERT INTO accounts (
+						id, name, provider, auth_method, created_at, weight
+					) VALUES (?, ?, ?, ?, ?, ?)
+				`,
+				["quota-owner", "Quota Owner", "codex", "oauth", Date.now(), 1],
+			);
+			db.run(
+				`
+					INSERT INTO account_quota_snapshots (
+						account_id, state, windows_json, collected_at, last_attempt_at, error
+					) VALUES (?, 'fresh', '[]', ?, ?, NULL)
+				`,
+				["quota-owner", "2026-08-04T15:00:00.000Z", "2026-08-04T15:00:00.000Z"],
+			);
+
+			db.run("DELETE FROM accounts WHERE id = ?", ["quota-owner"]);
+			expect(
+				db
+					.query("SELECT 1 FROM account_quota_snapshots WHERE account_id = ?")
+					.get("quota-owner"),
+			).toBeNull();
+		} finally {
+			db.close();
+		}
+	});
+
 	it("migrates a v1 database to v2 and preserves account and request data", () => {
 		const db = new Database(":memory:");
 

@@ -1,10 +1,12 @@
 import { validateNumber } from "@ccflare/core";
 import { errorResponse, NotFound } from "@ccflare/http";
+import { createAccountQuotaService } from "./account-quota-service";
 import { createAccountModelsHandler } from "./handlers/account-models";
 import { createAccountQuotaHandler } from "./handlers/account-quota";
 import {
 	createAccountAddHandler,
 	createAccountPauseHandler,
+	createAccountRateLimitResetHandler,
 	createAccountRemoveHandler,
 	createAccountRenameHandler,
 	createAccountResumeHandler,
@@ -90,6 +92,9 @@ export class APIRouter {
 	private registerHandlers(): void {
 		const { config, dbOps, getProvider, getProviders, getRuntimeHealth } =
 			this.context;
+		const accountQuotaService =
+			this.context.accountQuotaService ??
+			createAccountQuotaService(dbOps, config, getProvider);
 
 		// Create handlers (pre-instantiated, not created per-request)
 		const healthHandler = createHealthHandler(
@@ -124,11 +129,9 @@ export class APIRouter {
 		const accountRenameHandler = createAccountRenameHandler(dbOps);
 		const accountUpdateHandler = createAccountUpdateHandler(dbOps);
 		const accountRemoveHandler = createAccountRemoveHandler(dbOps);
-		const accountQuotaHandler = createAccountQuotaHandler(
-			dbOps,
-			config,
-			getProvider,
-		);
+		const accountQuotaHandler = createAccountQuotaHandler(accountQuotaService);
+		const accountRateLimitResetHandler =
+			createAccountRateLimitResetHandler(dbOps);
 		const accountModelsHandler = createAccountModelsHandler(
 			dbOps,
 			config,
@@ -234,6 +237,12 @@ export class APIRouter {
 			"GET",
 			"/api/accounts/:accountId/quota",
 			(req, _url, params) => accountQuotaHandler(req, params.accountId),
+		);
+		this.addDynamicRoute(
+			"POST",
+			"/api/accounts/:accountId/rate-limit/reset",
+			(req, _url, params) =>
+				accountRateLimitResetHandler(req, params.accountId),
 		);
 		this.addDynamicRoute(
 			"GET",

@@ -143,6 +143,13 @@ describe("ClaudeCodeProvider", () => {
 			access_token: "[REDACTED]",
 			note: "rejected [REDACTED]",
 		});
+		expect(report.windows).toEqual([
+			expect.objectContaining({
+				id: "claude-code:account:5h",
+				period: "5h",
+				usedPercent: 12,
+			}),
+		]);
 		expect(JSON.stringify(report)).not.toContain("must-not-leak");
 	});
 

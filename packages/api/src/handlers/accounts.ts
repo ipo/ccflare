@@ -27,6 +27,7 @@ import {
 	isAuthMethod,
 	type MutationResult,
 } from "@ccflare/types";
+import { serializeAccountQuotaSnapshot } from "../account-quota-service";
 import { serializeAccount } from "../serializers/account";
 import type { AccountResponse } from "../types";
 import { parseJsonObject } from "../utils/json";
@@ -97,12 +98,47 @@ function isDuplicateAccountNameError(error: unknown): boolean {
 export function createAccountsListHandler(dbOps: DatabaseOperations) {
 	return (): Response => {
 		const now = Date.now();
+		const quotaByAccount = new Map(
+			dbOps
+				.getAllAccountQuotaSnapshots()
+				.map((snapshot) => [snapshot.accountId, snapshot]),
+		);
 		const response: AccountResponse[] = dbOps
 			.getAllAccounts()
 			.sort((left, right) => right.request_count - left.request_count)
-			.map((account) => serializeAccount(account, now));
+			.map((account) =>
+				serializeAccount(
+					account,
+					now,
+					serializeAccountQuotaSnapshot(quotaByAccount.get(account.id) ?? null),
+				),
+			);
 
 		return jsonResponse(response);
+	};
+}
+
+/** Clear local rate-limit gating so an account can be attempted immediately. */
+export function createAccountRateLimitResetHandler(dbOps: DatabaseOperations) {
+	return async (_req: Request, accountId: string): Promise<Response> => {
+		try {
+			const account = dbOps.getAccount(accountId);
+			if (!account) return errorResponse(NotFound("Account not found"));
+
+			dbOps.clearAccountRateLimit(account.id);
+			const result: MutationResult<{ accountId: string }> = {
+				success: true,
+				message: `Local rate-limit state reset for account '${account.name}'`,
+				data: { accountId: account.id },
+			};
+			return jsonResponse(result);
+		} catch (error) {
+			return errorResponse(
+				error instanceof Error
+					? error
+					: new Error("Failed to reset account rate-limit state"),
+			);
+		}
 	};
 }
 

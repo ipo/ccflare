@@ -4,6 +4,7 @@ import type {
 	ModelCatalogVersionResult,
 	Provider,
 	ProviderQuotaState,
+	ProviderQuotaWindow,
 	QuotaSourceResult,
 } from "@ccflare/providers";
 import type {
@@ -38,6 +39,17 @@ export interface AccountResponse {
 		startedAt: string | null;
 		requestCount: number;
 	};
+	quota: AccountQuotaSnapshot | null;
+}
+
+export type AccountQuotaWindow = ProviderQuotaWindow;
+
+export interface AccountQuotaSnapshot {
+	windows: AccountQuotaWindow[];
+	collectedAt: string | null;
+	lastAttemptAt: string;
+	state: "fresh" | "stale" | "error";
+	error: string | null;
 }
 
 export interface AccountQuotaResponse {
@@ -48,7 +60,17 @@ export interface AccountQuotaResponse {
 	};
 	state: ProviderQuotaState;
 	collectedAt: string;
+	windows: AccountQuotaWindow[];
 	sources: Record<string, QuotaSourceResult>;
+}
+
+export interface AccountQuotaRefresher {
+	isSupported(provider: AccountProvider): boolean;
+	refreshAccountQuota(
+		accountId: string,
+		signal?: AbortSignal,
+	): Promise<AccountQuotaResponse>;
+	shutdown?(reason?: Error): Promise<void>;
 }
 
 export interface AccountModelsResponse {
@@ -67,5 +89,6 @@ export interface APIContext {
 	dbOps: DatabaseOperations;
 	getProviders: () => string[];
 	getProvider: (provider: AccountProvider) => Provider | undefined;
+	accountQuotaService?: AccountQuotaRefresher;
 	getRuntimeHealth?: () => RuntimeHealth;
 }

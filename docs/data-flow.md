@@ -244,6 +244,14 @@ The main mechanisms are:
 
 - `AsyncDbWriter` for non-blocking writes
 - the proxy post-processor worker for stream/websocket usage extraction
+- the quota refresh job, which runs after listen and hourly with bounded concurrency and no overlapping runs
+
+Quota refreshes call the shared account quota service directly rather than
+making loopback HTTP requests. They persist display snapshots for the accounts
+API. Provider response headers processed on the proxy path remain authoritative
+for immediate account gating; cached snapshots do not replace that path. The
+manual rate-limit reset endpoint clears only local gating metadata, and the
+next natural provider signal can restore it.
 
 ### Background Persistence Flow
 

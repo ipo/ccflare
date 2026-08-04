@@ -1,5 +1,15 @@
+import type {
+	AccountQuotaResponse,
+	AccountQuotaSnapshot,
+	AccountResponse,
+} from "@ccflare/api";
 import type { AccountProvider, TimeRange } from "@ccflare/types";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+	useMutation,
+	useQueries,
+	useQuery,
+	useQueryClient,
+} from "@tanstack/react-query";
 import { api } from "../api";
 import { REFRESH_INTERVALS } from "../constants";
 import { queryKeys } from "../lib/query-keys";
@@ -9,6 +19,51 @@ export const useAccounts = () => {
 		queryKey: queryKeys.accounts(),
 		queryFn: () => api.getAccounts(),
 		refetchInterval: REFRESH_INTERVALS.fast, // Refresh every 10 seconds for rate limit updates
+	});
+};
+
+const QUOTA_PROVIDERS = new Set<AccountProvider>([
+	"claude-code",
+	"codex",
+	"kimi",
+]);
+
+function toQuotaSnapshot(response: AccountQuotaResponse): AccountQuotaSnapshot {
+	const hasWindows = response.windows.length > 0;
+	return {
+		windows: response.windows,
+		collectedAt: response.collectedAt,
+		lastAttemptAt: response.collectedAt,
+		state: hasWindows ? "fresh" : "error",
+		error: hasWindows ? null : "No usable quota windows were returned.",
+	};
+}
+
+/**
+ * Fill missing account snapshots once per mounted query cache. The regular
+ * accounts query remains the source of truth once the server exposes the
+ * newly collected snapshot on its next refresh.
+ */
+export const useAccountQuotaSnapshots = (
+	accounts: AccountResponse[] | undefined,
+) => {
+	const quotaQueries = useQueries({
+		queries: (accounts ?? []).map((account) => ({
+			queryKey: queryKeys.accountQuota(account.id),
+			queryFn: () => api.getAccountQuota(account.id),
+			enabled: account.quota === null && QUOTA_PROVIDERS.has(account.provider),
+			staleTime: Number.POSITIVE_INFINITY,
+			retry: false,
+			refetchOnMount: false,
+			refetchOnReconnect: false,
+			refetchOnWindowFocus: false,
+		})),
+	});
+
+	return accounts?.map((account, index) => {
+		const liveQuota = quotaQueries[index]?.data;
+		if (account.quota !== null || !liveQuota) return account;
+		return { ...account, quota: toQuotaSnapshot(liveQuota) };
 	});
 };
 
@@ -67,6 +122,16 @@ export const useRenameAccount = () => {
 			accountId: string;
 			newName: string;
 		}) => api.renameAccount(accountId, newName),
+		onSuccess: () => {
+			queryClient.invalidateQueries({ queryKey: queryKeys.accounts() });
+		},
+	});
+};
+
+export const useResetAccountRateLimit = () => {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: (accountId: string) => api.resetAccountRateLimit(accountId),
 		onSuccess: () => {
 			queryClient.invalidateQueries({ queryKey: queryKeys.accounts() });
 		},

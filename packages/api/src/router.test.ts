@@ -4,14 +4,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Config } from "@ccflare/config";
 import { DatabaseFactory } from "@ccflare/database";
-import { providerRegistry } from "@ccflare/providers";
+import { type Provider, providerRegistry } from "@ccflare/providers";
 import { stopAllOAuthCallbackForwarders } from "./handlers/oauth";
 import { APIRouter } from "./router";
 
 const tempDirs: string[] = [];
 const originalFetch = globalThis.fetch;
 
-function createRouterContext() {
+function createRouterContext(options?: {
+	getProvider?: ConstructorParameters<typeof APIRouter>[0]["getProvider"];
+}) {
 	const tempDir = mkdtempSync(join(tmpdir(), "ccflare-http-api-"));
 	tempDirs.push(tempDir);
 
@@ -26,7 +28,9 @@ function createRouterContext() {
 		router: new APIRouter({
 			config,
 			dbOps,
-			getProvider: (provider) => providerRegistry.getProvider(provider),
+			getProvider:
+				options?.getProvider ??
+				((provider) => providerRegistry.getProvider(provider)),
 			getProviders: () => ["anthropic", "openai", "claude-code", "codex"],
 		}),
 	};
@@ -573,6 +577,7 @@ describe("APIRouter", () => {
 				startedAt: string | null;
 				requestCount: number;
 			};
+			quota: unknown;
 		}>;
 		expect(accounts).toEqual([
 			{
@@ -601,6 +606,7 @@ describe("APIRouter", () => {
 					startedAt: null,
 					requestCount: 0,
 				},
+				quota: null,
 			},
 		]);
 	});
@@ -761,6 +767,7 @@ describe("APIRouter", () => {
 		const body = (await response.json()) as {
 			account: { id: string; provider: string };
 			state: string;
+			windows: Array<{ id: string; usedPercent: number }>;
 			sources: Record<string, { data?: unknown }>;
 		};
 		expect(body).toEqual(
@@ -770,6 +777,12 @@ describe("APIRouter", () => {
 					provider: "claude-code",
 				}),
 				state: "ok",
+				windows: [
+					expect.objectContaining({
+						id: "claude-code:account:5h",
+						usedPercent: 25,
+					}),
+				],
 				sources: {
 					usage: expect.objectContaining({
 						data: {
@@ -798,6 +811,183 @@ describe("APIRouter", () => {
 		expect(serialized).not.toContain("fresh-access-token");
 		expect(serialized).not.toContain("fresh-refresh-token");
 		expect(serialized).not.toContain("upstream-secret");
+
+		const accountsResponse = await apiRequest(router, "GET", "/api/accounts");
+		const accounts = (await accountsResponse.json()) as Array<{
+			id: string;
+			quota: { state: string; windows: Array<{ id: string }> } | null;
+		}>;
+		expect(accounts.find((item) => item.id === account.id)?.quota).toEqual(
+			expect.objectContaining({
+				state: "fresh",
+				windows: [expect.objectContaining({ id: "claude-code:account:5h" })],
+			}),
+		);
+
+		installFetchMock(() =>
+			Response.json({ error: "temporarily unavailable" }, { status: 503 }),
+		);
+		const failedRefresh = await apiRequest(
+			router,
+			"GET",
+			`/api/accounts/${account.id}/quota`,
+		);
+		expect(failedRefresh.status).toBe(502);
+		expect(dbOps.getAccountQuotaSnapshot(account.id)).toEqual(
+			expect.objectContaining({
+				state: "stale",
+				windows: [expect.objectContaining({ id: "claude-code:account:5h" })],
+			}),
+		);
+
+		installFetchMock((request) =>
+			request.url.endsWith("/api/oauth/profile")
+				? Response.json({ subscription_type: "max" })
+				: Response.json({ error: "usage unavailable" }, { status: 503 }),
+		);
+		const partialRefresh = await apiRequest(
+			router,
+			"GET",
+			`/api/accounts/${account.id}/quota`,
+		);
+		expect(partialRefresh.status).toBe(200);
+		expect(dbOps.getAccountQuotaSnapshot(account.id)).toEqual(
+			expect.objectContaining({
+				state: "stale",
+				windows: [expect.objectContaining({ id: "claude-code:account:5h" })],
+			}),
+		);
+	});
+
+	it("deduplicates concurrent live quota refreshes for the same account", async () => {
+		const { router, dbOps } = createRouterContext();
+		const account = dbOps.createOAuthAccount({
+			name: "concurrent-quota-owner",
+			provider: "claude-code",
+			accessToken: "current-access-token",
+			refreshToken: "current-refresh-token",
+			expiresAt: Date.now() + 60_000,
+		});
+		let requests = 0;
+		installFetchMock(async () => {
+			requests++;
+			await Promise.resolve();
+			return Response.json({ five_hour: { utilization: 10 } });
+		});
+
+		const path = `/api/accounts/${account.id}/quota`;
+		const [first, second] = await Promise.all([
+			apiRequest(router, "GET", path),
+			apiRequest(router, "GET", path),
+		]);
+
+		expect(first.status).toBe(200);
+		expect(second.status).toBe(200);
+		expect(requests).toBe(2);
+	});
+
+	it("persists provider-supplied windows when raw source shapes evolve", async () => {
+		const provider = {
+			fetchQuota: async () => ({
+				state: "ok" as const,
+				collectedAt: "2026-08-04T00:00:00.000Z",
+				windows: [
+					{
+						id: "codex:model:future:30d",
+						label: "Future model monthly limit",
+						period: "30d",
+						scope: "model" as const,
+						model: "future-model",
+						usedPercent: 42,
+					},
+				],
+				sources: {
+					usage: {
+						state: "ok" as const,
+						status: 200,
+						data: { future_quota_envelope: true },
+					},
+				},
+			}),
+		} as unknown as Provider;
+		const { router, dbOps } = createRouterContext({
+			getProvider: () => provider,
+		});
+		const account = dbOps.createOAuthAccount({
+			name: "future-shape-owner",
+			provider: "codex",
+			accessToken: "current-access-token",
+			refreshToken: "current-refresh-token",
+			expiresAt: Date.now() + 60_000,
+		});
+
+		const response = await apiRequest(
+			router,
+			"GET",
+			`/api/accounts/${account.id}/quota`,
+		);
+		expect(response.status).toBe(200);
+		expect((await response.json()) as { windows: unknown[] }).toEqual(
+			expect.objectContaining({
+				windows: [
+					expect.objectContaining({
+						id: "codex:model:future:30d",
+						usedPercent: 42,
+					}),
+				],
+			}),
+		);
+		expect(dbOps.getAccountQuotaSnapshot(account.id)?.windows).toEqual([
+			expect.objectContaining({ id: "codex:model:future:30d" }),
+		]);
+	});
+
+	it("clears only local rate-limit state and retains cached quota", async () => {
+		const { router, dbOps } = createRouterContext();
+		const account = dbOps.createOAuthAccount({
+			name: "limited-owner",
+			provider: "codex",
+			accessToken: "access-token",
+			refreshToken: "refresh-token",
+			expiresAt: Date.now() + 60_000,
+		});
+		dbOps.markAccountRateLimited(account.id, Date.now() + 300_000);
+		dbOps.updateAccountRateLimitMeta(
+			account.id,
+			"rate_limited",
+			Date.now() + 300_000,
+			0,
+		);
+		dbOps.saveAccountQuotaSuccess({
+			accountId: account.id,
+			windows: [
+				{
+					id: "codex:account:main:5h",
+					label: "5-hour limit",
+					period: "5h",
+					scope: "account",
+					usedPercent: 100,
+				},
+			],
+			collectedAt: "2026-08-04T00:00:00.000Z",
+			lastAttemptAt: "2026-08-04T00:00:00.000Z",
+		});
+
+		const response = await apiRequest(
+			router,
+			"POST",
+			`/api/accounts/${account.id}/rate-limit/reset`,
+		);
+		expect(response.status).toBe(200);
+		expect(dbOps.getAccount(account.id)).toEqual(
+			expect.objectContaining({
+				rate_limited_until: null,
+				rate_limit_status: null,
+				rate_limit_reset: null,
+				rate_limit_remaining: null,
+			}),
+		);
+		expect(dbOps.getAccountQuotaSnapshot(account.id)?.windows).toHaveLength(1);
 	});
 
 	it("refreshes and retries once when all quota probes reject a current token", async () => {

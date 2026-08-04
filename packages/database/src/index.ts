@@ -12,4 +12,11 @@ export { type AccountRow, toAccount } from "./models/account-row";
 export { type RequestRow, toRequest } from "./models/request-row";
 export { resolveDbPath } from "./paths";
 export { analyzeIndexUsage } from "./performance-indexes";
+export type {
+	AccountQuotaSnapshot,
+	AccountQuotaSnapshotState,
+	AccountQuotaWindows,
+	SaveAccountQuotaFailureInput,
+	SaveAccountQuotaSuccessInput,
+} from "./repositories/account-quota-snapshot.repository";
 export type { RequestDetailRow } from "./repositories/request.repository";

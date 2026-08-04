@@ -3,6 +3,7 @@ import { type Account, getProviderDefaultBaseUrl } from "@ccflare/types";
 import { deleteTransportHeaders } from "../../base";
 import { collectModelCatalog } from "../../models";
 import { collectQuotaSources } from "../../quota";
+import { normalizeQuotaWindows } from "../../quota-normalization";
 import {
 	executeTokenRefresh,
 	type RefreshRequestConfig,
@@ -127,8 +128,15 @@ export class CodexProvider extends OpenAIProvider {
 	async refreshToken(
 		account: Account,
 		_clientId: string,
+		signal?: AbortSignal,
 	): Promise<TokenRefreshResult> {
-		return executeTokenRefresh(account, _clientId, CODEX_REFRESH_CONFIG, log);
+		return executeTokenRefresh(
+			account,
+			_clientId,
+			CODEX_REFRESH_CONFIG,
+			log,
+			signal,
+		);
 	}
 
 	async fetchModels(
@@ -190,7 +198,7 @@ export class CodexProvider extends OpenAIProvider {
 		}
 
 		const baseUrl = getCodexQuotaBaseUrl(account);
-		return collectQuotaSources(
+		const report = await collectQuotaSources(
 			[
 				{ name: "usage", url: `${baseUrl}/wham/usage` },
 				{ name: "account", url: `${baseUrl}/wham/accounts/check` },
@@ -203,6 +211,10 @@ export class CodexProvider extends OpenAIProvider {
 			fetchFn,
 			[account.access_token],
 		);
+		return {
+			...report,
+			windows: normalizeQuotaWindows(PROVIDER_NAME, report),
+		};
 	}
 
 	prepareHeaders(headers: Headers, account: Account | null): Headers {

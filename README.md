@@ -206,7 +206,8 @@ Key endpoints:
 
 - `GET /health` — status, account count, strategy, supported providers
 - `GET /api/accounts` — list accounts
-- `GET /api/accounts/:id/quota` — fetch live quota for one Claude Code or Codex account
+- `GET /api/accounts/:id/quota` — fetch and cache live quota for one Claude Code, Codex, or Kimi account
+- `POST /api/accounts/:id/rate-limit/reset` — clear local rate-limit gating for one account
 - `GET /api/accounts/:id/models` — fetch the live model catalog for one Codex account, tiered by client version
 - `POST /api/accounts` — create an account
 - `PATCH /api/accounts/:id` — update an account (rename, change `base_url`)

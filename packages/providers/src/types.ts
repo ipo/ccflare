@@ -31,9 +31,31 @@ export interface QuotaSourceResult {
 	error?: string;
 }
 
+export type ProviderQuotaWindowScope = "account" | "model" | "meter";
+
+/**
+ * Provider-independent view of one quota window.
+ *
+ * Provider payloads remain available under `ProviderQuotaReport.sources` for
+ * diagnostics. This projection contains only values that could be parsed
+ * safely from a successful usage source.
+ */
+export interface ProviderQuotaWindow {
+	id: string;
+	label: string;
+	period: string;
+	scope: ProviderQuotaWindowScope;
+	usedPercent: number;
+	used?: number;
+	limit?: number;
+	resetAt?: string;
+	model?: string;
+}
+
 export interface ProviderQuotaReport {
 	state: ProviderQuotaState;
 	collectedAt: string;
+	windows: ProviderQuotaWindow[];
 	sources: Record<string, QuotaSourceResult>;
 }
 
@@ -90,6 +112,7 @@ export interface Provider {
 	refreshToken?(
 		account: Account,
 		clientId: string,
+		signal?: AbortSignal,
 	): Promise<TokenRefreshResult>;
 
 	/**

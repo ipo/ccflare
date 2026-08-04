@@ -1,6 +1,8 @@
 export const queryKeys = {
 	all: ["ccflare"] as const,
 	accounts: () => [...queryKeys.all, "accounts"] as const,
+	accountQuota: (accountId: string) =>
+		[...queryKeys.all, "account-quota", accountId] as const,
 	stats: () => [...queryKeys.all, "stats"] as const,
 	analytics: (
 		timeRange?: string,

@@ -125,6 +125,13 @@ describe("CodexProvider", () => {
 			return Response.json({
 				allowed: true,
 				token_count: 15,
+				...(request.url.endsWith("/usage")
+					? {
+							rate_limit: {
+								primary_window: { used_percent: 15 },
+							},
+						}
+					: {}),
 				id_token: "must-not-leak",
 			});
 		});
@@ -152,8 +159,16 @@ describe("CodexProvider", () => {
 		expect(report.sources.usage.data).toEqual({
 			allowed: true,
 			token_count: 15,
+			rate_limit: { primary_window: { used_percent: 15 } },
 			id_token: "[REDACTED]",
 		});
+		expect(report.windows).toEqual([
+			expect.objectContaining({
+				id: "codex:account:main:5h",
+				period: "5h",
+				usedPercent: 15,
+			}),
+		]);
 		expect(JSON.stringify(report)).not.toContain("must-not-leak");
 		expect(JSON.stringify(report)).not.toContain(accessToken);
 	});

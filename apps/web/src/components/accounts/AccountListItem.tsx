@@ -6,11 +6,13 @@ import {
 	Edit2,
 	Pause,
 	Play,
+	RotateCcw,
 	Trash2,
 } from "lucide-react";
 import { ProviderBadge } from "../ProviderBadge";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
+import { QuotaSnapshot } from "./QuotaSnapshot";
 import { RateLimitProgress } from "./RateLimitProgress";
 
 function getAuthMethodLabel(authMethod: string): string {
@@ -31,6 +33,8 @@ interface AccountListItemProps {
 	account: AccountResponse;
 	isActive?: boolean;
 	onPauseToggle: (account: AccountResponse) => void;
+	onResetRateLimit: (accountId: string) => void;
+	isResettingRateLimit?: boolean;
 	onRemove: (account: AccountResponse) => void;
 	onRename: (account: AccountResponse) => void;
 }
@@ -39,6 +43,8 @@ export function AccountListItem({
 	account,
 	isActive = false,
 	onPauseToggle,
+	onResetRateLimit,
+	isResettingRateLimit = false,
 	onRemove,
 	onRename,
 }: AccountListItemProps) {
@@ -127,6 +133,20 @@ export function AccountListItem({
 			</div>
 			{account.rateLimitReset && (
 				<RateLimitProgress resetIso={account.rateLimitReset} />
+			)}
+			{account.quota && <QuotaSnapshot snapshot={account.quota} />}
+			{account.rateLimitStatus.isLimited && (
+				<div className="flex justify-end">
+					<Button
+						variant="outline"
+						size="sm"
+						onClick={() => onResetRateLimit(account.id)}
+						disabled={isResettingRateLimit}
+					>
+						<RotateCcw className={isResettingRateLimit ? "animate-spin" : ""} />
+						{isResettingRateLimit ? "Resetting..." : "Reset local rate limit"}
+					</Button>
+				</div>
 			)}
 		</div>
 	);

@@ -130,6 +130,18 @@ describe("KimiProvider", () => {
 			limits: [{ detail: { name: "5h limit", used: 1, limit: 100 } }],
 			access_token: "[REDACTED]",
 		});
+		expect(report.windows).toEqual([
+			expect.objectContaining({
+				id: "kimi:account:summary:7d",
+				period: "7d",
+				usedPercent: 4,
+			}),
+			expect.objectContaining({
+				id: "kimi:account:5h-limit:5h",
+				period: "5h",
+				usedPercent: 1,
+			}),
+		]);
 		expect(JSON.stringify(report)).not.toContain("must-not-leak");
 		expect(JSON.stringify(report)).not.toContain("stored-access");
 	});

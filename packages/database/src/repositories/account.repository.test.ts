@@ -101,6 +101,36 @@ describe("AccountRepository", () => {
 		).toEqual([limited.id, usable.id].sort());
 	});
 
+	it("clears all persisted rate-limit state in one account update", () => {
+		const account = repository.create({
+			name: "clear-rate-limit",
+			provider: "codex",
+			auth_method: "oauth",
+		});
+		repository.setRateLimited(account.id, 10_000);
+		repository.updateRateLimitMeta(account.id, "limited", 20_000, 0);
+
+		expect(repository.findById(account.id)).toEqual(
+			expect.objectContaining({
+				rate_limited_until: 10_000,
+				rate_limit_status: "limited",
+				rate_limit_reset: 20_000,
+				rate_limit_remaining: 0,
+			}),
+		);
+
+		repository.clearRateLimited(account.id);
+
+		expect(repository.findById(account.id)).toEqual(
+			expect.objectContaining({
+				rate_limited_until: null,
+				rate_limit_status: null,
+				rate_limit_reset: null,
+				rate_limit_remaining: null,
+			}),
+		);
+	});
+
 	it("updates existing accounts and returns the updated row", () => {
 		const created = repository.create({
 			name: "rename-me",

@@ -4,11 +4,12 @@ import {
 	getAccountSessionInfo,
 	getAccountTokenStatus,
 } from "@ccflare/types";
-import type { AccountResponse } from "../types";
+import type { AccountQuotaSnapshot, AccountResponse } from "../types";
 
 export function serializeAccount(
 	account: Account,
 	now: number = Date.now(),
+	quota: AccountQuotaSnapshot | null = null,
 ): AccountResponse {
 	const rateLimit = getAccountRateLimitInfo(account, now);
 	const session = getAccountSessionInfo(account);
@@ -47,5 +48,6 @@ export function serializeAccount(
 				: null,
 			requestCount: session.requestCount,
 		},
+		quota,
 	};
 }

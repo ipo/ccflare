@@ -146,6 +146,46 @@ describe("DatabaseOperations", () => {
 		}
 	});
 
+	it("exposes quota snapshot persistence through the shared facade", () => {
+		const tempDir = mkdtempSync(join(tmpdir(), "ccflare-db-ops-"));
+		tempDirs.push(tempDir);
+		const dbOps = new DatabaseOperations(join(tempDir, "ccflare.db"));
+
+		try {
+			const account = dbOps.createAccount({
+				name: "quota-facade",
+				provider: "codex",
+				auth_method: "oauth",
+			});
+			const success = dbOps.saveAccountQuotaSuccess({
+				accountId: account.id,
+				windows: [{ name: "primary", usedPercent: 10 }],
+				collectedAt: "2026-08-04T14:00:00.000Z",
+				lastAttemptAt: "2026-08-04T14:00:01.000Z",
+			});
+
+			expect(dbOps.getAccountQuotaSnapshot(account.id)).toEqual(success);
+			expect(dbOps.getAllAccountQuotaSnapshots()).toEqual([success]);
+
+			expect(
+				dbOps.saveAccountQuotaFailure({
+					accountId: account.id,
+					error: "temporary quota failure",
+					lastAttemptAt: "2026-08-04T14:05:00.000Z",
+				}),
+			).toEqual(
+				expect.objectContaining({
+					state: "stale",
+					windows: success.windows,
+					collectedAt: success.collectedAt,
+					error: "temporary quota failure",
+				}),
+			);
+		} finally {
+			dbOps.close();
+		}
+	});
+
 	it("aggregates analytics through the repository facade", () => {
 		const tempDir = mkdtempSync(join(tmpdir(), "ccflare-db-ops-"));
 		tempDirs.push(tempDir);

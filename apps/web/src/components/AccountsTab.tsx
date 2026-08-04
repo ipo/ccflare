@@ -133,6 +133,8 @@ export function AccountsTab() {
 					<AccountList
 						accounts={model.accounts}
 						onPauseToggle={(account) => model.togglePause(account)}
+						onResetRateLimit={model.resetRateLimit}
+						resettingRateLimitAccountId={model.resettingRateLimitAccountId}
 						onRemove={handleRemoveAccount}
 						onRename={(account) => setRenameDialog({ isOpen: true, account })}
 					/>

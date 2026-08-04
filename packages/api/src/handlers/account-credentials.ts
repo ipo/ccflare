@@ -37,7 +37,9 @@ export function createAccountCredentialRefresher(
 	return function refreshAccount(
 		account: Account,
 		provider: Provider,
+		signal?: AbortSignal,
 	): Promise<Account> {
+		signal?.throwIfAborted();
 		const existingRefresh = refreshInFlight.get(account.id);
 		if (existingRefresh) {
 			return existingRefresh;
@@ -48,7 +50,7 @@ export function createAccountCredentialRefresher(
 		}
 
 		const refresh = provider
-			.refreshToken(account, config.getRuntime().clientId)
+			.refreshToken(account, config.getRuntime().clientId, signal)
 			.then((result) => {
 				validateRefreshedTokens(result);
 				dbOps.updateAccountTokens(

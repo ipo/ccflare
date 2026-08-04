@@ -184,6 +184,7 @@ export async function collectQuotaSources(
 	return {
 		state: classifyQuotaState(sources),
 		collectedAt: new Date().toISOString(),
+		windows: [],
 		sources,
 	};
 }

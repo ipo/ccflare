@@ -22,6 +22,12 @@ import {
 	type UpdateAccountData,
 } from "./repositories/account.repository";
 import {
+	type AccountQuotaSnapshot,
+	AccountQuotaSnapshotRepository,
+	type SaveAccountQuotaFailureInput,
+	type SaveAccountQuotaSuccessInput,
+} from "./repositories/account-quota-snapshot.repository";
+import {
 	type AnalyticsQueryOptions,
 	AnalyticsRepository,
 } from "./repositories/analytics.repository";
@@ -55,6 +61,7 @@ export class DatabaseOperations implements StrategyStore, Disposable {
 
 	// Repositories
 	private accounts: AccountRepository;
+	private accountQuotaSnapshots: AccountQuotaSnapshotRepository;
 	private analytics: AnalyticsRepository;
 	private requests: RequestRepository;
 	private authSessions: AuthSessionRepository;
@@ -83,6 +90,7 @@ export class DatabaseOperations implements StrategyStore, Disposable {
 
 		// Initialize repositories
 		this.accounts = new AccountRepository(this.db);
+		this.accountQuotaSnapshots = new AccountQuotaSnapshotRepository(this.db);
 		this.analytics = new AnalyticsRepository(this.db);
 		this.requests = new RequestRepository(this.db);
 		this.authSessions = new AuthSessionRepository(this.db);
@@ -183,6 +191,26 @@ export class DatabaseOperations implements StrategyStore, Disposable {
 
 	clearAccountRateLimit(accountId: string): void {
 		this.accounts.clearRateLimited(accountId);
+	}
+
+	getAccountQuotaSnapshot(accountId: string): AccountQuotaSnapshot | null {
+		return this.accountQuotaSnapshots.findByAccountId(accountId);
+	}
+
+	getAllAccountQuotaSnapshots(): AccountQuotaSnapshot[] {
+		return this.accountQuotaSnapshots.findAll();
+	}
+
+	saveAccountQuotaSuccess(
+		input: SaveAccountQuotaSuccessInput,
+	): AccountQuotaSnapshot {
+		return this.accountQuotaSnapshots.saveSuccess(input);
+	}
+
+	saveAccountQuotaFailure(
+		input: SaveAccountQuotaFailureInput,
+	): AccountQuotaSnapshot {
+		return this.accountQuotaSnapshots.saveFailure(input);
 	}
 
 	updateAccountRateLimitMeta(

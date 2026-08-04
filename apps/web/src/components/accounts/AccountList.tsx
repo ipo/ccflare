@@ -4,6 +4,8 @@ import { AccountListItem } from "./AccountListItem";
 interface AccountListProps {
 	accounts: AccountResponse[] | undefined;
 	onPauseToggle: (account: AccountResponse) => void;
+	onResetRateLimit: (accountId: string) => void;
+	resettingRateLimitAccountId: string | null;
 	onRemove: (account: AccountResponse) => void;
 	onRename: (account: AccountResponse) => void;
 }
@@ -11,6 +13,8 @@ interface AccountListProps {
 export function AccountList({
 	accounts,
 	onPauseToggle,
+	onResetRateLimit,
+	resettingRateLimitAccountId,
 	onRemove,
 	onRename,
 }: AccountListProps) {
@@ -43,6 +47,8 @@ export function AccountList({
 					account={account}
 					isActive={account.id === mostRecentAccountId}
 					onPauseToggle={onPauseToggle}
+					onResetRateLimit={onResetRateLimit}
+					isResettingRateLimit={resettingRateLimitAccountId === account.id}
 					onRemove={onRemove}
 					onRename={onRename}
 				/>

@@ -1,4 +1,7 @@
-import { stopAllOAuthCallbackForwarders } from "@ccflare/api";
+import {
+	type AccountQuotaRefresher,
+	stopAllOAuthCallbackForwarders,
+} from "@ccflare/api";
 import { NETWORK, shutdown } from "@ccflare/core";
 import { DatabaseFactory } from "@ccflare/database";
 import { Logger, LogLevel } from "@ccflare/logger";
@@ -13,6 +16,10 @@ import { serve } from "bun";
 import { bootstrapRuntime, logInitialAccountStatus } from "./bootstrap-runtime";
 import { loadDashboardAssets, resetDashboardAssets } from "./dashboard-assets";
 import { createServerFetchHandler } from "./fetch-handler";
+import {
+	type QuotaRefreshJob,
+	startQuotaRefreshJob,
+} from "./quota-refresh-job";
 import { createStartupBanner } from "./startup-banner";
 import { runStartupMaintenance } from "./startup-maintenance";
 
@@ -24,6 +31,8 @@ const lifecycleLog = new Logger("ServerLifecycle", LogLevel.INFO, {
 // Module-level server instance
 let serverInstance: ReturnType<typeof serve> | null = null;
 let stopRetentionJob: (() => void) | null = null;
+let quotaRefreshJob: QuotaRefreshJob | null = null;
+let activeAccountQuotaService: AccountQuotaRefresher | null = null;
 let serverStopPromise: Promise<void> | null = null;
 
 export interface ServerHandle {
@@ -41,6 +50,12 @@ function stopRetentionMaintenance(): void {
 		stopRetentionJob();
 		stopRetentionJob = null;
 	}
+}
+
+async function stopQuotaRefresh(): Promise<void> {
+	const activeJob = quotaRefreshJob;
+	quotaRefreshJob = null;
+	await activeJob?.stop();
 }
 
 function toError(scope: string, error: unknown): Error {
@@ -66,11 +81,26 @@ async function stopServerRuntime(): Promise<void> {
 		const errors: Error[] = [];
 		const activeServer = serverInstance;
 		serverInstance = null;
+		const quotaService = activeAccountQuotaService;
+		activeAccountQuotaService = null;
+		const quotaStopPromise = stopQuotaRefresh();
 
 		try {
 			await activeServer?.stop(true);
 		} catch (error) {
 			errors.push(toError("Failed to stop Bun server", error));
+		}
+
+		try {
+			await quotaStopPromise;
+		} catch (error) {
+			errors.push(toError("Failed to stop quota refresh job", error));
+		}
+
+		try {
+			await quotaService?.shutdown?.(new Error("Server shutting down"));
+		} catch (error) {
+			errors.push(toError("Failed to stop account quota service", error));
 		}
 
 		stopRetentionMaintenance();
@@ -136,8 +166,15 @@ export default function startServer(
 		loadDashboardAssets();
 	}
 
-	const { config, dbOps, log, apiRouter, proxyContext, runtimeConfig } =
-		bootstrapRuntime(port, serverLog);
+	const {
+		config,
+		dbOps,
+		log,
+		apiRouter,
+		accountQuotaService,
+		proxyContext,
+		runtimeConfig,
+	} = bootstrapRuntime(port, serverLog);
 
 	stopRetentionJob = runStartupMaintenance(config, dbOps);
 
@@ -156,6 +193,8 @@ export default function startServer(
 		},
 		websocket: websocketProxyHandler,
 	});
+	activeAccountQuotaService = accountQuotaService;
+	quotaRefreshJob = startQuotaRefreshJob(dbOps, accountQuotaService, log);
 	const activePort = serverInstance.port ?? runtimeConfig.port;
 
 	lifecycleLog.info(

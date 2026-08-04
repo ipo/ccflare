@@ -6,6 +6,7 @@ function report(data: unknown, state: "ok" | "partial" | "failed" = "ok") {
 	return {
 		state,
 		collectedAt: new Date().toISOString(),
+		windows: [],
 		sources: {
 			usage: { state: "ok" as const, status: 200, data },
 		},
@@ -29,6 +30,18 @@ describe("quotaIndicatesAvailability", () => {
 				report({ rate_limit: { allowed: false, limit_reached: true } }),
 			),
 		).toBe(false);
+	});
+
+	test("codex: accepts the root-level availability used by the quota API", () => {
+		expect(
+			quotaIndicatesAvailability(
+				"codex",
+				report({
+					allowed: true,
+					rate_limit: { primary_window: { used_percent: 10 } },
+				}),
+			),
+		).toBe(true);
 	});
 
 	test("claude-code: all reported windows < 100% => available", () => {

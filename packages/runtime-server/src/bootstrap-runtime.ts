@@ -1,4 +1,8 @@
-import { APIRouter } from "@ccflare/api";
+import {
+	type AccountQuotaRefresher,
+	APIRouter,
+	createAccountQuotaService,
+} from "@ccflare/api";
 import { Config, type RuntimeConfig } from "@ccflare/config";
 import {
 	container,
@@ -25,6 +29,7 @@ export type BootstrappedRuntime = {
 	log: Logger;
 	asyncWriter: AsyncDbWriter;
 	apiRouter: APIRouter;
+	accountQuotaService: AccountQuotaRefresher;
 	proxyContext: ProxyContext;
 	runtimeConfig: RuntimeConfig;
 };
@@ -96,11 +101,17 @@ export function bootstrapRuntime(
 	container.registerInstance(SERVICE_KEYS.PricingLogger, pricingLogger);
 	setPricingLogger(pricingLogger);
 
+	const accountQuotaService = createAccountQuotaService(
+		dbOps,
+		config,
+		(provider) => providerRegistry.getProvider(provider),
+	);
 	const apiRouter = new APIRouter({
 		config,
 		dbOps,
 		getProvider: (provider) => providerRegistry.getProvider(provider),
 		getProviders: () => providerRegistry.listProviders(),
+		accountQuotaService,
 		getRuntimeHealth: () => ({
 			asyncWriter: {
 				healthy: asyncWriter.isHealthy(),
@@ -134,6 +145,7 @@ export function bootstrapRuntime(
 		log,
 		asyncWriter,
 		apiRouter,
+		accountQuotaService,
 		proxyContext,
 		runtimeConfig,
 	};
