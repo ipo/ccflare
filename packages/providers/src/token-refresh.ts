@@ -4,6 +4,40 @@ import type { TokenRefreshResult } from "./types";
 
 const TOKEN_REFRESH_TIMEOUT_MS = 15_000;
 
+export class OAuthTokenRefreshError extends Error {
+	readonly requiresSignIn: boolean;
+
+	constructor(
+		public readonly httpStatus: number,
+		public readonly oauthCode?: string,
+		public readonly safeDescription?: string,
+	) {
+		super(
+			safeDescription
+				? `OAuth token refresh failed: ${safeDescription}`
+				: `OAuth token refresh failed with HTTP ${httpStatus}`,
+		);
+		this.name = "OAuthTokenRefreshError";
+		this.requiresSignIn =
+			oauthCode === "invalid_grant" || httpStatus === 401 || httpStatus === 403;
+	}
+}
+
+function sanitizeDescription(
+	value: unknown,
+	account: Account,
+): string | undefined {
+	if (typeof value !== "string") return undefined;
+	let sanitized = value
+		.replace(/[\r\n\t]+/g, " ")
+		.trim()
+		.slice(0, 300);
+	for (const credential of [account.access_token, account.refresh_token]) {
+		if (credential) sanitized = sanitized.replaceAll(credential, "[REDACTED]");
+	}
+	return sanitized || undefined;
+}
+
 /**
  * Provider-specific configuration for building a token refresh request.
  */
@@ -56,29 +90,30 @@ export async function executeTokenRefresh(
 	});
 
 	if (!response.ok) {
-		let errorMessage = response.statusText;
-		let errorData: unknown = null;
+		let oauthCode: string | undefined;
+		let safeDescription = sanitizeDescription(response.statusText, account);
 		try {
-			errorData = await response.json();
-			const errorObj = errorData as {
+			const errorObj = (await response.json()) as {
 				error?: string;
 				error_description?: string;
 				message?: string;
 			};
-			errorMessage =
-				errorObj.error_description ||
-				errorObj.message ||
-				errorObj.error ||
-				errorMessage;
+			oauthCode = sanitizeDescription(errorObj.error, account);
+			safeDescription =
+				sanitizeDescription(
+					errorObj.error_description || errorObj.message || errorObj.error,
+					account,
+				) ?? safeDescription;
 		} catch {
 			// Fall back to the HTTP status text
 		}
 		log.error(
-			`Token refresh failed for ${account.name}: Status ${response.status}, Error: ${errorMessage}`,
-			errorData,
+			`Token refresh failed for ${account.name}: HTTP ${response.status}${oauthCode ? ` (${oauthCode})` : ""}`,
 		);
-		throw new Error(
-			`Failed to refresh token for account ${account.name}: ${errorMessage}`,
+		throw new OAuthTokenRefreshError(
+			response.status,
+			oauthCode,
+			safeDescription,
 		);
 	}
 

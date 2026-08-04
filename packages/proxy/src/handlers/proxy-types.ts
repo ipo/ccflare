@@ -2,6 +2,7 @@ import type { RuntimeConfig } from "@ccflare/config";
 import type { AsyncDbWriter, DatabaseOperations } from "@ccflare/database";
 import type { Provider, ProviderRegistry } from "@ccflare/providers";
 import {
+	type AccountCredentialManager,
 	type AccountProvider,
 	isAccountProvider,
 	type LoadBalancingStrategy,
@@ -14,7 +15,7 @@ export interface ProxyContext {
 	dbOps: DatabaseOperations;
 	runtime: RuntimeConfig;
 	providerRegistry: ProviderRegistry;
-	refreshInFlight: Map<string, Promise<string>>;
+	credentialManager: AccountCredentialManager;
 	asyncWriter: AsyncDbWriter;
 	usageWorker: UsageWorkerTransport;
 	websocketRecorder: WebSocketTranscriptRecorder;

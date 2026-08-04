@@ -145,6 +145,7 @@ async function stopServerRuntime(): Promise<void> {
 	}
 }
 
+export { AccountCredentialManager } from "./account-credential-manager";
 export { createServerFetchHandler } from "./fetch-handler";
 export { createStartupBanner } from "./startup-banner";
 

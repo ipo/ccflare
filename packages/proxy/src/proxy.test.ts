@@ -72,7 +72,14 @@ function createProxyContext(providers: Provider[]): ProxyContext {
 			sessionDurationMs: 0,
 			port: 8080,
 		},
-		refreshInFlight: new Map(),
+		credentialManager: {
+			async getValidAccount(account: Account) {
+				return account;
+			},
+			async refreshAfterUnauthorized(account: Account) {
+				return account;
+			},
+		},
 		asyncWriter: {
 			enqueue() {},
 		},

@@ -173,11 +173,12 @@ Provider implementations own the remote protocol details:
 The large Codex `/wham/profiles/me` history is intentionally not fetched. It is
 optional in the reference script and does not provide the current quota windows.
 
-The API layer owns local account lookup, token refresh and persistence, and
-HTTP error mapping. Independent upstream probes run concurrently so a failed
-secondary source does not discard usable quota data. Credential-shaped fields
-are recursively redacted before any provider payload reaches the management
-response.
+The runtime's shared account credential manager owns token refresh and
+synchronous persistence for the API and proxy paths. The API layer owns local
+account lookup and HTTP error mapping. Independent upstream probes run
+concurrently so a failed secondary source does not discard usable quota data.
+Credential-shaped fields are recursively redacted before any provider payload
+reaches the management response.
 
 `anthropic` and `openai` accounts currently return `501` because this endpoint
 only implements the OAuth subscription quota protocols used by Claude Code,

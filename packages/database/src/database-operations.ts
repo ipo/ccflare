@@ -179,6 +179,24 @@ export class DatabaseOperations implements StrategyStore, Disposable {
 		this.accounts.updateTokens(accountId, accessToken, expiresAt, refreshToken);
 	}
 
+	updateAccountTokensIfCredentialsMatch(
+		accountId: string,
+		expectedAccessToken: string | null,
+		expectedRefreshToken: string | null,
+		accessToken: string,
+		expiresAt: number,
+		refreshToken: string,
+	): boolean {
+		return this.accounts.updateTokensIfCredentialsMatch(
+			accountId,
+			expectedAccessToken,
+			expectedRefreshToken,
+			accessToken,
+			expiresAt,
+			refreshToken,
+		);
+	}
+
 	updateAccountUsage(accountId: string): void {
 		const sessionDuration =
 			this.runtime?.sessionDurationMs || 5 * 60 * 60 * 1000;

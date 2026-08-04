@@ -232,8 +232,11 @@ Background write queue used to avoid blocking request forwarding.
 Typical uses:
 
 - request metadata persistence
-- token refresh persistence
 - payload persistence and post-processing writes
+
+OAuth token refreshes are intentionally not queued here. The runtime account
+credential manager stores access tokens, expiry, and rotated refresh tokens
+synchronously with a credential-guarded update before any waiter resumes.
 
 ## Migration Model
 
@@ -309,7 +312,8 @@ The most important normal write paths are:
 3. payload persistence written to `request_payloads`
 4. WebSocket frames appended in batches to `websocket_transcript_chunks`
 5. auth-session state written to `auth_sessions`
-6. token refresh, rate-limit, and session state written back to `accounts`
+6. synchronous guarded token refresh plus asynchronous rate-limit and session
+   state written back to `accounts`
 
 ## Maintenance
 

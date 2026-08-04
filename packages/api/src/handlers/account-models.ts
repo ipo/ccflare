@@ -1,4 +1,3 @@
-import type { Config } from "@ccflare/config";
 import type { DatabaseOperations } from "@ccflare/database";
 import {
 	BadGateway,
@@ -10,12 +9,13 @@ import {
 import { Logger } from "@ccflare/logger";
 import type { Provider, ProviderModelsReport } from "@ccflare/providers";
 import { sanitizeQuotaData } from "@ccflare/providers";
-import type { Account, AccountProvider } from "@ccflare/types";
+import type {
+	Account,
+	AccountCredentialManager,
+	AccountProvider,
+} from "@ccflare/types";
 import type { AccountModelsResponse } from "../types";
-import {
-	createAccountCredentialRefresher,
-	needsTokenRefresh,
-} from "./account-credentials";
+import { credentialRefreshHttpError } from "./credential-errors";
 
 const log = new Logger("AccountModelsHandler");
 const MODELS_PROVIDERS = new Set<AccountProvider>(["codex"]);
@@ -50,11 +50,9 @@ function toModelsResponse(
  */
 export function createAccountModelsHandler(
 	dbOps: DatabaseOperations,
-	config: Config,
 	getProvider: (provider: AccountProvider) => Provider | undefined,
+	credentialManager: AccountCredentialManager,
 ) {
-	const refreshAccount = createAccountCredentialRefresher(dbOps, config);
-
 	return async (_req: Request, accountId: string): Promise<Response> => {
 		let account = dbOps.getAccount(accountId);
 		if (!account) {
@@ -82,8 +80,9 @@ export function createAccountModelsHandler(
 
 		let refreshed = false;
 		try {
-			if (needsTokenRefresh(account)) {
-				account = await refreshAccount(account, provider);
+			const beforeValidation = account;
+			account = await credentialManager.getValidAccount(account);
+			if (account.access_token !== beforeValidation.access_token) {
 				refreshed = true;
 			}
 
@@ -93,7 +92,10 @@ export function createAccountModelsHandler(
 				report.state === "failed" &&
 				hasUnauthorizedVersion(report)
 			) {
-				account = await refreshAccount(account, provider);
+				account = await credentialManager.refreshAfterUnauthorized(
+					account,
+					account.access_token ?? "",
+				);
 				report = await provider.fetchModels(account);
 			}
 
@@ -106,6 +108,8 @@ export function createAccountModelsHandler(
 
 			return jsonResponse(response);
 		} catch (error) {
+			const credentialError = credentialRefreshHttpError(error, account);
+			if (credentialError) return errorResponse(credentialError);
 			log.error(
 				`Model listing failed for account ${account.id} (${account.provider})`,
 				error instanceof Error ? error.name : "Unknown failure",

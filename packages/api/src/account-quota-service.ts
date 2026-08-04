@@ -1,4 +1,3 @@
-import type { Config } from "@ccflare/config";
 import type {
 	DatabaseOperations,
 	AccountQuotaSnapshot as StoredAccountQuotaSnapshot,
@@ -11,11 +10,12 @@ import {
 	type ProviderQuotaReport,
 	sanitizeQuotaData,
 } from "@ccflare/providers";
-import type { Account, AccountProvider } from "@ccflare/types";
-import {
-	createAccountCredentialRefresher,
-	needsTokenRefresh,
-} from "./handlers/account-credentials";
+import type {
+	Account,
+	AccountCredentialManager,
+	AccountProvider,
+} from "@ccflare/types";
+import { credentialRefreshHttpError } from "./handlers/credential-errors";
 import type {
 	AccountQuotaRefresher,
 	AccountQuotaResponse,
@@ -186,10 +186,9 @@ export function quotaIndicatesAvailability(
 
 export function createAccountQuotaService(
 	dbOps: DatabaseOperations,
-	config: Config,
 	getProvider: (provider: AccountProvider) => Provider | undefined,
+	credentialManager: AccountCredentialManager,
 ): AccountQuotaRefresher {
-	const refreshCredentials = createAccountCredentialRefresher(dbOps, config);
 	type InFlightRefresh = {
 		promise: Promise<AccountQuotaResponse>;
 		linkSignal(signal?: AbortSignal): void;
@@ -221,8 +220,9 @@ export function createAccountQuotaService(
 
 		try {
 			let refreshed = false;
-			if (needsTokenRefresh(account)) {
-				account = await refreshCredentials(account, provider, signal);
+			const beforeValidation = account;
+			account = await credentialManager.getValidAccount(account, signal);
+			if (account.access_token !== beforeValidation.access_token) {
 				refreshed = true;
 			}
 
@@ -236,7 +236,11 @@ export function createAccountQuotaService(
 				report.state === "failed" &&
 				hasUnauthorizedSource(report)
 			) {
-				account = await refreshCredentials(account, provider, signal);
+				account = await credentialManager.refreshAfterUnauthorized(
+					account,
+					account.access_token ?? "",
+					signal,
+				);
 				report = await provider.fetchQuota(
 					account,
 					quotaFetchWithSignal(signal),
@@ -291,6 +295,8 @@ export function createAccountQuotaService(
 		} catch (error) {
 			if (signal?.aborted) throw error;
 			if (error instanceof HttpError) throw error;
+			const credentialError = credentialRefreshHttpError(error, account);
+			if (credentialError) throw credentialError;
 			dbOps.saveAccountQuotaFailure({
 				accountId: account.id,
 				error: failureMessage(error),

@@ -8,6 +8,7 @@ import type {
 	QuotaSourceResult,
 } from "@ccflare/providers";
 import type {
+	AccountCredentialManager,
 	AccountProvider,
 	AuthMethod,
 	RuntimeHealth,
@@ -89,6 +90,7 @@ export interface APIContext {
 	dbOps: DatabaseOperations;
 	getProviders: () => string[];
 	getProvider: (provider: AccountProvider) => Provider | undefined;
+	credentialManager: AccountCredentialManager;
 	accountQuotaService?: AccountQuotaRefresher;
 	getRuntimeHealth?: () => RuntimeHealth;
 }

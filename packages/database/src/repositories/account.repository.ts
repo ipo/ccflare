@@ -251,6 +251,31 @@ export class AccountRepository extends BaseRepository<Account> {
 		}
 	}
 
+	updateTokensIfCredentialsMatch(
+		accountId: string,
+		expectedAccessToken: string | null,
+		expectedRefreshToken: string | null,
+		accessToken: string,
+		expiresAt: number,
+		refreshToken: string,
+	): boolean {
+		return (
+			this.runWithChanges(
+				`UPDATE accounts
+				 SET access_token = ?, expires_at = ?, refresh_token = ?
+				 WHERE id = ? AND access_token IS ? AND refresh_token IS ?`,
+				[
+					accessToken,
+					expiresAt,
+					refreshToken,
+					accountId,
+					expectedAccessToken,
+					expectedRefreshToken,
+				],
+			) > 0
+		);
+	}
+
 	incrementUsage(accountId: string, sessionDurationMs: number): void {
 		const now = Date.now();
 		this.run(

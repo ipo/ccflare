@@ -32,6 +32,9 @@ export const NotFound = (message: string, details?: unknown) =>
 export const Conflict = (message: string, details?: unknown) =>
 	new HttpError(409, message, details);
 
+export const Unauthorized = (message: string, details?: unknown) =>
+	new HttpError(401, message, details);
+
 export const BadGateway = (message: string, details?: unknown) =>
 	new HttpError(502, message, details);
 

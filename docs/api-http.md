@@ -239,6 +239,10 @@ credentials before querying. A fully unauthorized collective response also
 triggers one refresh-and-retry. Rotated tokens are persisted but are never
 included in the API response.
 
+If the token endpoint reports `invalid_grant` or HTTP `401`/`403`, the endpoint
+returns `401` with a clear instruction to sign that account in again. Temporary
+token endpoint and network failures remain upstream `502` errors.
+
 **Response:**
 
 ```json
@@ -346,6 +350,10 @@ The handler refreshes missing, expired, expiry-less, or nearly expired OAuth
 credentials before querying. A fully unauthorized response also triggers one
 refresh-and-retry. Rotated tokens are persisted but are never included in the
 API response.
+
+If the token endpoint reports `invalid_grant` or HTTP `401`/`403`, the endpoint
+returns `401` with a clear instruction to sign that account in again. Temporary
+token endpoint and network failures remain upstream `502` errors.
 
 **Response:**
 

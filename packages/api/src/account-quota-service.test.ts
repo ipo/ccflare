@@ -1,8 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import type { Config } from "@ccflare/config";
 import type { DatabaseOperations } from "@ccflare/database";
 import type { Provider } from "@ccflare/providers";
-import type { Account } from "@ccflare/types";
+import type { Account, AccountCredentialManager } from "@ccflare/types";
 import { createAccountQuotaService } from "./account-quota-service";
 
 const originalFetch = globalThis.fetch;
@@ -12,6 +11,15 @@ afterEach(() => {
 });
 
 describe("account quota service", () => {
+	const credentialManager: AccountCredentialManager = {
+		async getValidAccount(account) {
+			return account;
+		},
+		async refreshAfterUnauthorized(account) {
+			return account;
+		},
+	};
+
 	test("links a later scheduler abort to an API-first deduplicated refresh", async () => {
 		const account = {
 			id: "account-1",
@@ -55,8 +63,8 @@ describe("account quota service", () => {
 
 		const service = createAccountQuotaService(
 			dbOps,
-			{} as Config,
 			() => provider,
+			credentialManager,
 		);
 		const apiRefresh = service.refreshAccountQuota(account.id);
 		await Promise.resolve();
@@ -109,8 +117,8 @@ describe("account quota service", () => {
 
 		const service = createAccountQuotaService(
 			dbOps,
-			{} as Config,
 			() => provider,
+			credentialManager,
 		);
 		const refresh = service.refreshAccountQuota(account.id);
 		await Promise.resolve();

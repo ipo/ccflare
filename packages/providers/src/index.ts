@@ -18,6 +18,7 @@ export {
 	registry as providerRegistry,
 	resolveProvider,
 } from "./registry";
+export * from "./token-refresh";
 export * from "./types";
 
 import { AnthropicProvider } from "./providers/anthropic/provider";

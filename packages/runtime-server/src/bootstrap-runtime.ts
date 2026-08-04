@@ -22,6 +22,7 @@ import {
 	SessionStrategy,
 	WebSocketTranscriptRecorder,
 } from "@ccflare/proxy";
+import { AccountCredentialManager } from "./account-credential-manager";
 
 export type BootstrappedRuntime = {
 	config: Config;
@@ -30,6 +31,7 @@ export type BootstrappedRuntime = {
 	asyncWriter: AsyncDbWriter;
 	apiRouter: APIRouter;
 	accountQuotaService: AccountQuotaRefresher;
+	credentialManager: AccountCredentialManager;
 	proxyContext: ProxyContext;
 	runtimeConfig: RuntimeConfig;
 };
@@ -101,16 +103,22 @@ export function bootstrapRuntime(
 	container.registerInstance(SERVICE_KEYS.PricingLogger, pricingLogger);
 	setPricingLogger(pricingLogger);
 
+	const credentialManager = new AccountCredentialManager(
+		dbOps,
+		runtimeConfig.clientId,
+		(provider) => providerRegistry.getProvider(provider),
+	);
 	const accountQuotaService = createAccountQuotaService(
 		dbOps,
-		config,
 		(provider) => providerRegistry.getProvider(provider),
+		credentialManager,
 	);
 	const apiRouter = new APIRouter({
 		config,
 		dbOps,
 		getProvider: (provider) => providerRegistry.getProvider(provider),
 		getProviders: () => providerRegistry.listProviders(),
+		credentialManager,
 		accountQuotaService,
 		getRuntimeHealth: () => ({
 			asyncWriter: {
@@ -131,7 +139,7 @@ export function bootstrapRuntime(
 		dbOps,
 		runtime: runtimeConfig,
 		providerRegistry,
-		refreshInFlight: new Map(),
+		credentialManager,
 		asyncWriter,
 		usageWorker: getUsageWorker(),
 		websocketRecorder,
@@ -146,6 +154,7 @@ export function bootstrapRuntime(
 		asyncWriter,
 		apiRouter,
 		accountQuotaService,
+		credentialManager,
 		proxyContext,
 		runtimeConfig,
 	};

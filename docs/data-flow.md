@@ -62,10 +62,12 @@ Provider-native requests follow this path:
 2. runtime server routes it to the proxy layer
 3. proxy resolves the provider implementation
 4. proxy/session strategy selects candidate accounts
-5. provider prepares upstream URL and headers
-6. request is forwarded upstream
-7. response metadata is normalized
-8. request events and persistence work are scheduled
+5. the shared credential manager synchronously refreshes and persists OAuth
+   credentials when required
+6. provider prepares upstream URL and headers
+7. request is forwarded upstream
+8. response metadata is normalized
+9. request events and persistence work are scheduled
 
 ### Proxy Forwarding Sequence
 
@@ -206,7 +208,7 @@ Important note:
 Updated for:
 
 - account creation
-- token refresh
+- synchronous credential-guarded token refresh
 - request/session counters
 - pause/resume state
 - rate-limit metadata

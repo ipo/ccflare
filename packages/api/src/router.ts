@@ -94,7 +94,11 @@ export class APIRouter {
 			this.context;
 		const accountQuotaService =
 			this.context.accountQuotaService ??
-			createAccountQuotaService(dbOps, config, getProvider);
+			createAccountQuotaService(
+				dbOps,
+				getProvider,
+				this.context.credentialManager,
+			);
 
 		// Create handlers (pre-instantiated, not created per-request)
 		const healthHandler = createHealthHandler(
@@ -134,8 +138,8 @@ export class APIRouter {
 			createAccountRateLimitResetHandler(dbOps);
 		const accountModelsHandler = createAccountModelsHandler(
 			dbOps,
-			config,
 			getProvider,
+			this.context.credentialManager,
 		);
 
 		// Pre-instantiate auth handlers

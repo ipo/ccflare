@@ -39,6 +39,21 @@ export interface Account {
 	rate_limit_remaining: number | null;
 }
 
+/**
+ * Runtime-wide controller for OAuth access-token refreshes.
+ *
+ * Implementations must serialize provider refreshes per account and persist
+ * replacement credentials before resolving either operation.
+ */
+export interface AccountCredentialManager {
+	getValidAccount(account: Account, signal?: AbortSignal): Promise<Account>;
+	refreshAfterUnauthorized(
+		account: Account,
+		rejectedAccessToken: string,
+		signal?: AbortSignal,
+	): Promise<Account>;
+}
+
 // Account creation types
 export interface AddAccountOptions {
 	name: string;

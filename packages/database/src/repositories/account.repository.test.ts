@@ -77,6 +77,47 @@ describe("AccountRepository", () => {
 		);
 	});
 
+	it("updates tokens only while both stored credentials match", () => {
+		const account = repository.create({
+			name: "guarded-refresh",
+			provider: "kimi",
+			auth_method: "oauth",
+			access_token: "old-access",
+			refresh_token: "old-refresh",
+			expires_at: 1,
+		});
+
+		expect(
+			repository.updateTokensIfCredentialsMatch(
+				account.id,
+				"wrong-access",
+				"old-refresh",
+				"stale-access",
+				200,
+				"stale-refresh",
+			),
+		).toBe(false);
+		expect(repository.findById(account.id)?.access_token).toBe("old-access");
+
+		expect(
+			repository.updateTokensIfCredentialsMatch(
+				account.id,
+				"old-access",
+				"old-refresh",
+				"new-access",
+				300,
+				"new-refresh",
+			),
+		).toBe(true);
+		expect(repository.findById(account.id)).toEqual(
+			expect.objectContaining({
+				access_token: "new-access",
+				refresh_token: "new-refresh",
+				expires_at: 300,
+			}),
+		);
+	});
+
 	it("filters rate-limited accounts unless explicitly included", () => {
 		const usable = repository.create({
 			name: "usable-codex",

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { Config } from "@ccflare/config";
 import { DatabaseFactory } from "@ccflare/database";
 import { type Provider, providerRegistry } from "@ccflare/providers";
+import type { Account, AccountCredentialManager } from "@ccflare/types";
 import { stopAllOAuthCallbackForwarders } from "./handlers/oauth";
 import { APIRouter } from "./router";
 
@@ -13,6 +14,7 @@ const originalFetch = globalThis.fetch;
 
 function createRouterContext(options?: {
 	getProvider?: ConstructorParameters<typeof APIRouter>[0]["getProvider"];
+	credentialManager?: AccountCredentialManager;
 }) {
 	const tempDir = mkdtempSync(join(tmpdir(), "ccflare-http-api-"));
 	tempDirs.push(tempDir);
@@ -21,17 +23,57 @@ function createRouterContext(options?: {
 	DatabaseFactory.reset();
 	DatabaseFactory.initialize(join(tempDir, "ccflare.db"));
 	const dbOps = DatabaseFactory.getInstance();
+	const getProvider =
+		options?.getProvider ??
+		((provider: Account["provider"]) => providerRegistry.getProvider(provider));
+	const refresh = async (account: Account): Promise<Account> => {
+		const provider = getProvider(account.provider);
+		if (!provider?.refreshToken || !account.refresh_token) {
+			throw new Error("No refresh token is available for this account");
+		}
+		const result = await provider.refreshToken(
+			account,
+			config.getRuntime().clientId,
+		);
+		dbOps.updateAccountTokens(
+			account.id,
+			result.accessToken,
+			result.expiresAt,
+			result.refreshToken,
+		);
+		const stored = dbOps.getAccount(account.id);
+		if (!stored) throw new Error("Account disappeared");
+		return stored;
+	};
+	const credentialManager: AccountCredentialManager =
+		options?.credentialManager ?? {
+			async getValidAccount(account) {
+				const stored = dbOps.getAccount(account.id) ?? account;
+				return stored.access_token &&
+					stored.expires_at !== null &&
+					stored.expires_at - Date.now() > 30_000
+					? stored
+					: refresh(stored);
+			},
+			async refreshAfterUnauthorized(account, rejectedAccessToken) {
+				const stored = dbOps.getAccount(account.id) ?? account;
+				return stored.access_token &&
+					stored.access_token !== rejectedAccessToken
+					? stored
+					: refresh(stored);
+			},
+		};
 
 	return {
 		config,
 		dbOps,
+		credentialManager,
 		router: new APIRouter({
 			config,
 			dbOps,
-			getProvider:
-				options?.getProvider ??
-				((provider) => providerRegistry.getProvider(provider)),
+			getProvider,
 			getProviders: () => ["anthropic", "openai", "claude-code", "codex"],
+			credentialManager,
 		}),
 	};
 }
@@ -245,12 +287,13 @@ describe("APIRouter", () => {
 	});
 
 	it("includes runtime health details in the health response when available", async () => {
-		const { config, dbOps } = createRouterContext();
+		const { config, dbOps, credentialManager } = createRouterContext();
 		const router = new APIRouter({
 			config,
 			dbOps,
 			getProvider: (provider) => providerRegistry.getProvider(provider),
 			getProviders: () => ["anthropic", "openai", "claude-code", "codex"],
+			credentialManager,
 			getRuntimeHealth: () => ({
 				asyncWriter: {
 					healthy: true,
@@ -856,6 +899,106 @@ describe("APIRouter", () => {
 				state: "stale",
 				windows: [expect.objectContaining({ id: "claude-code:account:5h" })],
 			}),
+		);
+	});
+
+	it("returns sanitized sign-in-required 401s for OAuth refresh rejections", async () => {
+		const providers = [
+			{ provider: "kimi", label: "Kimi" },
+			{ provider: "codex", label: "Codex" },
+			{ provider: "claude-code", label: "Claude Code" },
+		] as const;
+		const failures = [
+			{ status: 400, code: "invalid_grant" },
+			{ status: 401, code: "invalid_token" },
+			{ status: 403, code: "access_denied" },
+		] as const;
+
+		for (const { provider, label } of providers) {
+			for (const failure of failures) {
+				const { router, dbOps } = createRouterContext();
+				const account = dbOps.createOAuthAccount({
+					name: `${provider}-${failure.status}`,
+					provider,
+					accessToken: `secret-access-${provider}`,
+					refreshToken: `secret-refresh-${provider}`,
+					expiresAt: Date.now() - 1,
+				});
+				installFetchMock(() =>
+					Response.json(
+						{
+							error: failure.code,
+							error_description: `rejected secret-refresh-${provider}`,
+							raw_payload_secret: "must-not-leak",
+						},
+						{ status: failure.status },
+					),
+				);
+
+				const response = await apiRequest(
+					router,
+					"GET",
+					`/api/accounts/${account.id}/quota`,
+				);
+				expect(response.status).toBe(401);
+				const serialized = await response.text();
+				expect(JSON.parse(serialized)).toEqual({
+					error: `${label} account '${account.name}' must sign in again`,
+				});
+				expect(serialized).not.toContain("secret-access");
+				expect(serialized).not.toContain("secret-refresh");
+				expect(serialized).not.toContain("must-not-leak");
+			}
+		}
+	}, 20_000);
+
+	it("returns 401 for model credential rejection and 502 for a temporary refresh failure", async () => {
+		const modelContext = createRouterContext();
+		const modelAccount = modelContext.dbOps.createOAuthAccount({
+			name: "models-signin",
+			provider: "codex",
+			accessToken: "expired-model-access",
+			refreshToken: "revoked-model-refresh",
+			expiresAt: Date.now() - 1,
+		});
+		installFetchMock(() =>
+			Response.json(
+				{ error: "invalid_grant", error_description: "revoked" },
+				{ status: 400 },
+			),
+		);
+		const modelResponse = await apiRequest(
+			modelContext.router,
+			"GET",
+			`/api/accounts/${modelAccount.id}/models`,
+		);
+		expect(modelResponse.status).toBe(401);
+		expect(await modelResponse.json()).toEqual({
+			error: "Codex account 'models-signin' must sign in again",
+		});
+
+		const quotaContext = createRouterContext();
+		const quotaAccount = quotaContext.dbOps.createOAuthAccount({
+			name: "temporary-kimi",
+			provider: "kimi",
+			accessToken: "expired-kimi-access",
+			refreshToken: "temporary-kimi-refresh",
+			expiresAt: Date.now() - 1,
+		});
+		installFetchMock(() =>
+			Response.json(
+				{ error: "temporarily_unavailable", error_description: "try later" },
+				{ status: 503 },
+			),
+		);
+		const quotaResponse = await apiRequest(
+			quotaContext.router,
+			"GET",
+			`/api/accounts/${quotaAccount.id}/quota`,
+		);
+		expect(quotaResponse.status).toBe(502);
+		expect(await quotaResponse.json()).toEqual(
+			expect.objectContaining({ error: "Failed to fetch account quota" }),
 		);
 	});
 

@@ -93,6 +93,7 @@ It currently owns:
 After the recent refactor, its internal modules are:
 
 - `bootstrap-runtime.ts`
+- `account-credential-manager.ts`
 - `dashboard-assets.ts`
 - `fetch-handler.ts`
 - `startup-banner.ts`
@@ -108,6 +109,7 @@ graph TD
     BOOT[bootstrapRuntime()]
     DB[DatabaseFactory.initialize + getInstance]
     WRITER[AsyncDbWriter]
+    CREDENTIALS[AccountCredentialManager]
     API[APIRouter]
     STRAT[SessionStrategy]
     PROXY_CTX[ProxyContext]
@@ -119,6 +121,10 @@ graph TD
     START --> BOOT
     BOOT --> DB
     BOOT --> WRITER
+    BOOT --> CREDENTIALS
+    CREDENTIALS --> DB
+    CREDENTIALS --> API
+    CREDENTIALS --> PROXY_CTX
     BOOT --> API
     BOOT --> STRAT
     BOOT --> PROXY_CTX
