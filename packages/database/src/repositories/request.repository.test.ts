@@ -72,6 +72,25 @@ describe("RequestRepository", () => {
 		db.close();
 	});
 
+	function insertRequest(
+		id: string,
+		timestamp: number,
+		method = "POST",
+		success: number | null = 1,
+		responseTimeMs: number | null = 10,
+	): void {
+		db.run(
+			`INSERT INTO requests (
+				id, timestamp, method, path, success, response_time_ms
+			) VALUES (?, ?, ?, '/', ?, ?)`,
+			[id, timestamp, method, success, responseTimeMs],
+		);
+	}
+
+	function insertPayload(id: string): void {
+		db.run(`INSERT INTO request_payloads (id, json) VALUES (?, '{}')`, [id]);
+	}
+
 	it("tracks in-flight rows without marking them as failures and preserves the original timestamp on completion", () => {
 		repository.saveMeta(
 			"request-1",
@@ -448,5 +467,90 @@ describe("RequestRepository", () => {
 				.listResponseChainPayloadsWithAccountNames("leaf-a")
 				.map((row) => row.id),
 		).toEqual(["root", "branch-a", "leaf-a"]);
+	});
+
+	it("deletes request batches with the exact unbatched retention predicate", () => {
+		const cutoff = 10_000;
+		insertRequest("old-http-1", 1_000);
+		insertRequest("old-http-2", 2_000);
+		insertRequest("new-http", 20_000);
+		insertRequest("old-ws-closed", 3_000, "WS", 1, 100);
+		insertRequest("old-ws-open", 3_000, "WS", null, null);
+		insertRequest("ws-opened-old-closed-new", 9_900, "WS", 1, 200);
+
+		const expected = db
+			.query<{ id: string }, [number, number]>(
+				`
+					SELECT id FROM requests
+					WHERE (method != 'WS' AND timestamp < ?)
+						OR (
+							method = 'WS'
+							AND success IS NOT NULL
+							AND timestamp + COALESCE(response_time_ms, 0) < ?
+						)
+					ORDER BY id
+				`,
+			)
+			.all(cutoff, cutoff)
+			.map((row) => row.id);
+
+		let removed = 0;
+		while (true) {
+			const batch = repository.deleteOlderThanBatch(cutoff, 2);
+			expect(batch).toBeLessThanOrEqual(2);
+			removed += batch;
+			if (batch === 0) break;
+		}
+
+		expect(removed).toBe(expected.length);
+		expect(expected).toEqual(["old-http-1", "old-http-2", "old-ws-closed"]);
+		expect(
+			db
+				.query<{ id: string }, []>(`SELECT id FROM requests ORDER BY id`)
+				.all()
+				.map((row) => row.id),
+		).toEqual(["new-http", "old-ws-open", "ws-opened-old-closed-new"]);
+	});
+
+	it("deletes old payloads in bounded batches and keeps newer payloads", () => {
+		for (let index = 0; index < 5; index++) {
+			insertRequest(`old-${index}`, 1_000 + index);
+			insertPayload(`old-${index}`);
+		}
+		insertRequest("new", 20_000);
+		insertPayload("new");
+
+		let removed = 0;
+		while (true) {
+			const batch = repository.deletePayloadsOlderThanBatch(10_000, 2);
+			expect(batch).toBeLessThanOrEqual(2);
+			removed += batch;
+			if (batch === 0) break;
+		}
+
+		expect(removed).toBe(5);
+		expect(
+			db.query<{ id: string }, []>(`SELECT id FROM request_payloads`).all(),
+		).toEqual([{ id: "new" }]);
+	});
+
+	it("deletes orphaned payloads in bounded batches", () => {
+		db.exec("PRAGMA foreign_keys = OFF");
+		for (let index = 0; index < 5; index++) insertPayload(`orphan-${index}`);
+		insertRequest("kept", 1_000);
+		insertPayload("kept");
+
+		let removed = 0;
+		while (true) {
+			const batch = repository.deleteOrphanedPayloadsBatch(2);
+			expect(batch).toBeLessThanOrEqual(2);
+			removed += batch;
+			if (batch === 0) break;
+		}
+
+		expect(removed).toBe(5);
+		expect(
+			db.query<{ id: string }, []>(`SELECT id FROM request_payloads`).all(),
+		).toEqual([{ id: "kept" }]);
 	});
 });

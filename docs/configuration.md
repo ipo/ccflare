@@ -55,6 +55,9 @@ The configuration file is stored at:
   "retry_delay_ms": 1000,
   "retry_backoff": 2,
   "session_duration_ms": 18000000,
+  "data_retention_days": 7,
+  "request_retention_days": 365,
+  "cleanup_interval_hours": 6,
   "port": 8080
 }
 ```
@@ -72,6 +75,9 @@ The configuration file is stored at:
 | `retry_backoff` | number | `2` | Exponential backoff multiplier for retry delays |
 | `session_duration_ms` | number | `18000000` (5 hours) | Session persistence duration in milliseconds |
 | `port` | number | `8080` | HTTP server port |
+| `data_retention_days` | number | `7` | Retention window for payloads and closed WebSocket transcript chunks (1–365 days) |
+| `request_retention_days` | number | `365` | Retention window for request metadata (1–3650 days) |
+| `cleanup_interval_hours` | number | `6` | Hours between background retention passes (1–168 hours) |
 
 ### Load Balancing Strategy
 
@@ -104,6 +110,7 @@ The configuration file is stored at:
 | `PORT` | `port` | number | `PORT=3000` |
 | `DATA_RETENTION_DAYS` | `data_retention_days` | number | `DATA_RETENTION_DAYS=7` (payloads) |
 | `REQUEST_RETENTION_DAYS` | `request_retention_days` | number | `REQUEST_RETENTION_DAYS=365` (metadata) |
+| `CLEANUP_INTERVAL_HOURS` | `cleanup_interval_hours` | number | `CLEANUP_INTERVAL_HOURS=6` |
 | `ccflare_CONFIG_PATH` | - | string | `ccflare_CONFIG_PATH=/etc/ccflare.json` |
 
 ### Additional Environment Variables
@@ -450,6 +457,12 @@ Response:
 ```
 
 Note: Payload retention applies to request/response JSON payloads. Request metadata retention controls how long rows in the `requests` table are kept (affects analytics beyond the window).
+
+Retention cleanup runs in bounded background batches. Its first pass starts
+about 10 seconds after the server begins listening, then repeats every
+`cleanup_interval_hours` (default 6). The setting is read at startup; values
+outside 1–168 hours are clamped to that range. Cleanup never runs during boot
+and does not compact the database file.
 
 #### Set Retention
 ```http

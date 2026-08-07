@@ -35,6 +35,7 @@ export interface ConfigData {
 	port?: number;
 	data_retention_days?: number;
 	request_retention_days?: number;
+	cleanup_interval_hours?: number;
 	[key: string]: string | number | boolean | undefined;
 }
 
@@ -76,6 +77,7 @@ function sanitizeConfigData(value: unknown): ConfigData {
 		"port",
 		"data_retention_days",
 		"request_retention_days",
+		"cleanup_interval_hours",
 	] as const;
 
 	for (const key of numericKeys) {
@@ -224,6 +226,17 @@ export class Config extends EventEmitter {
 		this.set("request_retention_days", clamped);
 	}
 
+	getCleanupIntervalHours(): number {
+		const fromEnv = process.env.CLEANUP_INTERVAL_HOURS;
+		if (fromEnv) {
+			const n = parseInt(fromEnv, 10);
+			if (!Number.isNaN(n)) return this.clamp(n, 1, 168);
+		}
+		const fromFile = this.data.cleanup_interval_hours;
+		if (typeof fromFile === "number") return this.clamp(fromFile, 1, 168);
+		return 6;
+	}
+
 	getAllSettings(): Record<string, string | number | boolean | undefined> {
 		// Include current strategy (which might come from env)
 		return {
@@ -231,6 +244,7 @@ export class Config extends EventEmitter {
 			lb_strategy: this.getStrategy(),
 			data_retention_days: this.getDataRetentionDays(),
 			request_retention_days: this.getRequestRetentionDays(),
+			cleanup_interval_hours: this.getCleanupIntervalHours(),
 		};
 	}
 

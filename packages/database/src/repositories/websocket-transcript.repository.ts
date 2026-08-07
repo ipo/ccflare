@@ -4,6 +4,8 @@ import type {
 } from "@ccflare/types";
 import { BaseRepository } from "./base.repository";
 
+export const WEBSOCKET_TRANSCRIPT_DELETE_BATCH_SIZE = 500;
+
 interface WebSocketTranscriptChunkRow {
 	request_id: string;
 	chunk_sequence: number;
@@ -164,6 +166,30 @@ export class WebSocketTranscriptRepository extends BaseRepository<WebSocketTrans
 				)
 			`,
 			[cutoffTs],
+		);
+	}
+
+	deleteClosedOlderThanBatch(
+		cutoffTs: number,
+		limit = WEBSOCKET_TRANSCRIPT_DELETE_BATCH_SIZE,
+	): number {
+		return this.runWithChanges(
+			`
+				DELETE FROM websocket_transcript_chunks
+				WHERE (request_id, chunk_sequence) IN (
+					SELECT chunks.request_id, chunks.chunk_sequence
+					FROM requests
+					JOIN websocket_transcript_chunks AS chunks
+						ON chunks.request_id = requests.id
+					WHERE requests.timestamp < ?
+						AND requests.method = 'WS'
+						AND requests.success IS NOT NULL
+						AND requests.timestamp
+							+ COALESCE(requests.response_time_ms, 0) < ?
+					LIMIT ?
+				)
+			`,
+			[cutoffTs, cutoffTs, limit],
 		);
 	}
 }

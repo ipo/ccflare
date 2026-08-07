@@ -35,6 +35,7 @@ describe("WebSocketTranscriptRepository", () => {
 		chunkSequence: number,
 		first: number,
 		last: number,
+		requestId = "ws-1",
 	): WebSocketTranscriptChunk {
 		const entries = Array.from({ length: last - first + 1 }, (_, index) => ({
 			sequence: first + index,
@@ -46,7 +47,7 @@ describe("WebSocketTranscriptRepository", () => {
 			data: `frame-${first + index}`,
 		}));
 		return {
-			requestId: "ws-1",
+			requestId,
 			chunkSequence,
 			firstFrameSequence: first,
 			lastFrameSequence: last,
@@ -89,5 +90,36 @@ describe("WebSocketTranscriptRepository", () => {
 		]);
 		db.run(`DELETE FROM requests WHERE id = ?`, ["ws-1"]);
 		expect(transcripts.listAfter("ws-1", 0, 10)).toHaveLength(0);
+	});
+
+	it("deletes closed old transcript chunks in bounded batches", () => {
+		db.run(
+			`UPDATE requests SET success = 1, response_time_ms = 100 WHERE id = 'ws-1'`,
+		);
+		transcripts.appendChunks(
+			Array.from({ length: 5 }, (_, index) =>
+				chunk(index, index + 1, index + 1),
+			),
+		);
+		requests.saveMeta("ws-new", "WS", "/", "codex", "/", null, 101, 20_000);
+		db.run(
+			`UPDATE requests SET success = 1, response_time_ms = 100 WHERE id = 'ws-new'`,
+		);
+		transcripts.appendChunk(chunk(0, 1, 1, "ws-new"));
+		requests.saveMeta("ws-open", "WS", "/", "codex", "/", null, 101, 1_000);
+		transcripts.appendChunk(chunk(0, 1, 1, "ws-open"));
+
+		let removed = 0;
+		while (true) {
+			const batch = transcripts.deleteClosedOlderThanBatch(10_000, 2);
+			expect(batch).toBeLessThanOrEqual(2);
+			removed += batch;
+			if (batch === 0) break;
+		}
+
+		expect(removed).toBe(5);
+		expect(transcripts.listAfter("ws-1", 0, 10)).toHaveLength(0);
+		expect(transcripts.listAfter("ws-new", 0, 10)).toHaveLength(1);
+		expect(transcripts.listAfter("ws-open", 0, 10)).toHaveLength(1);
 	});
 });

@@ -16,6 +16,10 @@ import {
 } from "../models/request-row";
 import { BaseRepository } from "./base.repository";
 
+export const REQUEST_DELETE_BATCH_SIZE = 1_000;
+export const PAYLOAD_DELETE_BATCH_SIZE = 100;
+export const ORPHANED_PAYLOAD_DELETE_BATCH_SIZE = 1_000;
+
 const log = new Logger("RequestRepository");
 
 export interface RequestData {
@@ -762,6 +766,31 @@ export class RequestRepository extends BaseRepository<RequestData> {
 		);
 	}
 
+	deleteOlderThanBatch(
+		cutoffTs: number,
+		limit = REQUEST_DELETE_BATCH_SIZE,
+	): number {
+		return this.runWithChanges(
+			`
+				DELETE FROM requests
+				WHERE id IN (
+					SELECT id FROM requests
+					WHERE timestamp < ?
+						AND (
+							method != 'WS'
+							OR (
+								method = 'WS'
+								AND success IS NOT NULL
+								AND timestamp + COALESCE(response_time_ms, 0) < ?
+							)
+						)
+					LIMIT ?
+				)
+			`,
+			[cutoffTs, cutoffTs, limit],
+		);
+	}
+
 	clear(): number {
 		return this.runWithChanges(`DELETE FROM requests`);
 	}
@@ -772,10 +801,50 @@ export class RequestRepository extends BaseRepository<RequestData> {
 		);
 	}
 
+	deleteOrphanedPayloadsBatch(
+		limit = ORPHANED_PAYLOAD_DELETE_BATCH_SIZE,
+	): number {
+		return this.runWithChanges(
+			`
+				DELETE FROM request_payloads
+				WHERE id IN (
+					SELECT payload.id
+					FROM request_payloads AS payload
+					WHERE NOT EXISTS (
+						SELECT 1 FROM requests WHERE requests.id = payload.id
+					)
+					LIMIT ?
+				)
+			`,
+			[limit],
+		);
+	}
+
 	deletePayloadsOlderThan(cutoffTs: number): number {
 		return this.runWithChanges(
 			`DELETE FROM request_payloads WHERE id IN (SELECT id FROM requests WHERE timestamp < ?)`,
 			[cutoffTs],
+		);
+	}
+
+	deletePayloadsOlderThanBatch(
+		cutoffTs: number,
+		limit = PAYLOAD_DELETE_BATCH_SIZE,
+	): number {
+		return this.runWithChanges(
+			`
+				DELETE FROM request_payloads
+				WHERE id IN (
+					SELECT requests.id FROM requests
+					WHERE requests.timestamp < ?
+						AND EXISTS (
+							SELECT 1 FROM request_payloads
+							WHERE request_payloads.id = requests.id
+						)
+					LIMIT ?
+				)
+			`,
+			[cutoffTs, limit],
 		);
 	}
 }

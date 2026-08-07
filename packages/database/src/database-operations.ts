@@ -50,6 +50,13 @@ export interface DatabaseOperationsOptions {
 	initializeSchema?: boolean;
 }
 
+export interface RetentionCleanupStepResult {
+	removedRequests: number;
+	removedPayloads: number;
+	removedTranscriptChunks: number;
+	removedOrphanedPayloads: number;
+}
+
 /**
  * DatabaseOperations using Repository Pattern
  * Provides a clean, organized interface for database operations
@@ -567,6 +574,32 @@ export class DatabaseOperations implements StrategyStore, Disposable {
 	}
 
 	// Cleanup operations (payload by age; request metadata by age; plus orphan sweep)
+	cleanupOldRequestsStep(
+		payloadRetentionMs: number,
+		requestRetentionMs?: number,
+		now = Date.now(),
+	): RetentionCleanupStepResult {
+		const payloadCutoff = now - payloadRetentionMs;
+		let removedRequests = 0;
+		if (
+			typeof requestRetentionMs === "number" &&
+			Number.isFinite(requestRetentionMs)
+		) {
+			removedRequests = this.requests.deleteOlderThanBatch(
+				now - requestRetentionMs,
+			);
+		}
+
+		return {
+			removedRequests,
+			removedPayloads:
+				this.requests.deletePayloadsOlderThanBatch(payloadCutoff),
+			removedTranscriptChunks:
+				this.websocketTranscripts.deleteClosedOlderThanBatch(payloadCutoff),
+			removedOrphanedPayloads: this.requests.deleteOrphanedPayloadsBatch(),
+		};
+	}
+
 	cleanupOldRequests(
 		payloadRetentionMs: number,
 		requestRetentionMs?: number,
@@ -575,22 +608,28 @@ export class DatabaseOperations implements StrategyStore, Disposable {
 		removedPayloads: number;
 	} {
 		const now = Date.now();
-		const payloadCutoff = now - payloadRetentionMs;
 		let removedRequests = 0;
-		if (
-			typeof requestRetentionMs === "number" &&
-			Number.isFinite(requestRetentionMs)
-		) {
-			const requestCutoff = now - requestRetentionMs;
-			removedRequests = this.requests.deleteOlderThan(requestCutoff);
+		let removedPayloads = 0;
+		while (true) {
+			const step = this.cleanupOldRequestsStep(
+				payloadRetentionMs,
+				requestRetentionMs,
+				now,
+			);
+			removedRequests += step.removedRequests;
+			removedPayloads +=
+				step.removedPayloads +
+				step.removedTranscriptChunks +
+				step.removedOrphanedPayloads;
+			if (
+				step.removedRequests === 0 &&
+				step.removedPayloads === 0 &&
+				step.removedTranscriptChunks === 0 &&
+				step.removedOrphanedPayloads === 0
+			) {
+				break;
+			}
 		}
-		const removedPayloadsByAge =
-			this.requests.deletePayloadsOlderThan(payloadCutoff);
-		const removedTranscriptChunks =
-			this.websocketTranscripts.deleteClosedOlderThan(payloadCutoff);
-		const removedOrphans = this.requests.deleteOrphanedPayloads();
-		const removedPayloads =
-			removedPayloadsByAge + removedTranscriptChunks + removedOrphans;
 		return { removedRequests, removedPayloads };
 	}
 

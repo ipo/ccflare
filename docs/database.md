@@ -317,10 +317,16 @@ The most important normal write paths are:
 
 ## Maintenance
 
-The runtime performs one-shot startup maintenance:
+The runtime performs one synchronous startup maintenance action:
 
 - reconcile WebSocket rows interrupted by a previous process
-- cleanup of old requests/payloads based on retention settings
+
+Retention cleanup starts only after the HTTP server is listening. Its first
+background pass begins after about 10 seconds and later passes follow the
+configured cleanup interval. Each request, payload, transcript, and orphan
+delete is bounded and committed independently, with an event-loop yield between
+batches. This keeps startup, request handling, and shutdown responsive even
+when a large retention backlog has accumulated.
 
 Database compaction is explicit rather than automatic so startup does not rewrite a potentially large transcript database.
 
@@ -334,7 +340,12 @@ Retention is configured separately for:
 - request metadata
 - request/response payloads and closed WebSocket transcript chunks
 
-Active WebSocket requests are not removed by age. At startup, rows left open by a previous process are marked interrupted before retention cleanup runs. Closed WebSocket retention is measured from effective close time rather than connection-open time.
+Active WebSocket requests are not removed by age. At startup, rows left open by
+a previous process are marked interrupted; the later background retention pass
+can then process them under the existing closed-WebSocket rules. Closed
+WebSocket retention is measured from effective close time rather than
+connection-open time. Cleanup does not run `VACUUM`; file compaction remains an
+explicit maintenance action.
 
 ## Practical Guidance
 

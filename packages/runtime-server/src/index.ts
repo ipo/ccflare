@@ -20,6 +20,7 @@ import {
 	type QuotaRefreshJob,
 	startQuotaRefreshJob,
 } from "./quota-refresh-job";
+import { startRetentionCleanupJob } from "./retention-cleanup-job";
 import { createStartupBanner } from "./startup-banner";
 import { runStartupMaintenance } from "./startup-maintenance";
 
@@ -30,7 +31,7 @@ const lifecycleLog = new Logger("ServerLifecycle", LogLevel.INFO, {
 
 // Module-level server instance
 let serverInstance: ReturnType<typeof serve> | null = null;
-let stopRetentionJob: (() => void) | null = null;
+let stopRetentionJob: (() => Promise<void>) | null = null;
 let quotaRefreshJob: QuotaRefreshJob | null = null;
 let activeAccountQuotaService: AccountQuotaRefresher | null = null;
 let serverStopPromise: Promise<void> | null = null;
@@ -45,11 +46,10 @@ export interface StartServerOptions {
 	withDashboard?: boolean;
 }
 
-function stopRetentionMaintenance(): void {
-	if (stopRetentionJob) {
-		stopRetentionJob();
-		stopRetentionJob = null;
-	}
+function stopRetentionMaintenance(): Promise<void> {
+	const stop = stopRetentionJob;
+	stopRetentionJob = null;
+	return stop?.() ?? Promise.resolve();
 }
 
 async function stopQuotaRefresh(): Promise<void> {
@@ -84,6 +84,7 @@ async function stopServerRuntime(): Promise<void> {
 		const quotaService = activeAccountQuotaService;
 		activeAccountQuotaService = null;
 		const quotaStopPromise = stopQuotaRefresh();
+		const retentionStopPromise = stopRetentionMaintenance();
 
 		try {
 			await activeServer?.stop(true);
@@ -98,12 +99,17 @@ async function stopServerRuntime(): Promise<void> {
 		}
 
 		try {
+			await retentionStopPromise;
+		} catch (error) {
+			errors.push(toError("Failed to stop retention cleanup job", error));
+		}
+
+		try {
 			await quotaService?.shutdown?.(new Error("Server shutting down"));
 		} catch (error) {
 			errors.push(toError("Failed to stop account quota service", error));
 		}
 
-		stopRetentionMaintenance();
 		closeAllWebSocketProxySessions();
 
 		try {
@@ -177,7 +183,7 @@ export default function startServer(
 		runtimeConfig,
 	} = bootstrapRuntime(port, serverLog);
 
-	stopRetentionJob = runStartupMaintenance(config, dbOps);
+	runStartupMaintenance(dbOps);
 
 	const fetchHandler = createServerFetchHandler({
 		apiRouter,
@@ -195,6 +201,7 @@ export default function startServer(
 		websocket: websocketProxyHandler,
 	});
 	activeAccountQuotaService = accountQuotaService;
+	stopRetentionJob = startRetentionCleanupJob(config, dbOps, log).stop;
 	quotaRefreshJob = startQuotaRefreshJob(dbOps, accountQuotaService, log);
 	const activePort = serverInstance.port ?? runtimeConfig.port;
 

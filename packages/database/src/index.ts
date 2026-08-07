@@ -5,7 +5,10 @@ export {
 } from "./analytics-query";
 export { analyzeDatabasePerformance } from "./analyze-performance";
 export { AsyncDbWriter } from "./async-writer";
-export { DatabaseOperations } from "./database-operations";
+export {
+	DatabaseOperations,
+	type RetentionCleanupStepResult,
+} from "./database-operations";
 export { DatabaseFactory } from "./factory";
 export { ensureSchema, runMigrations } from "./migrations";
 export { type AccountRow, toAccount } from "./models/account-row";

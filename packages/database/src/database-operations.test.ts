@@ -393,4 +393,66 @@ describe("DatabaseOperations", () => {
 			dbOps.close();
 		}
 	});
+
+	it("returns zero counts for a retention cleanup step with no qualifying rows", () => {
+		const tempDir = mkdtempSync(join(tmpdir(), "ccflare-db-ops-"));
+		tempDirs.push(tempDir);
+		const dbOps = new DatabaseOperations(join(tempDir, "ccflare.db"));
+
+		try {
+			expect(dbOps.cleanupOldRequestsStep(1_000, 1_000)).toEqual({
+				removedRequests: 0,
+				removedPayloads: 0,
+				removedTranscriptChunks: 0,
+				removedOrphanedPayloads: 0,
+			});
+		} finally {
+			dbOps.close();
+		}
+	});
+
+	it("keeps the full cleanup contract while looping over payload batches", () => {
+		const tempDir = mkdtempSync(join(tmpdir(), "ccflare-db-ops-"));
+		tempDirs.push(tempDir);
+		const dbOps = new DatabaseOperations(join(tempDir, "ccflare.db"));
+
+		try {
+			const db = dbOps.getDatabase();
+			const insertRequest = db.prepare(
+				`INSERT INTO requests (id, timestamp, method, path, provider)
+				 VALUES (?, 0, 'POST', '/', 'openai')`,
+			);
+			const insertPayload = db.prepare(
+				`INSERT INTO request_payloads (id, json) VALUES (?, '{}')`,
+			);
+			db.exec("BEGIN");
+			for (let index = 0; index < 101; index++) {
+				const id = `old-payload-${index}`;
+				insertRequest.run(id);
+				insertPayload.run(id);
+			}
+			db.exec("COMMIT");
+
+			expect(dbOps.cleanupOldRequests(1)).toEqual({
+				removedRequests: 0,
+				removedPayloads: 101,
+			});
+			expect(
+				db
+					.query<{ count: number }, []>(
+						`SELECT count(*) AS count FROM request_payloads`,
+					)
+					.get()?.count,
+			).toBe(0);
+			expect(
+				db
+					.query<{ count: number }, []>(
+						`SELECT count(*) AS count FROM requests`,
+					)
+					.get()?.count,
+			).toBe(101);
+		} finally {
+			dbOps.close();
+		}
+	});
 });
