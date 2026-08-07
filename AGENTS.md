@@ -10,6 +10,13 @@ This file is the repo-local source of truth for:
 - DRY / refactor expectations
 - where to look in `docs/` before making architectural changes
 
+## Protect the Running Service
+
+Never stop, restart, kill, signal, or otherwise interrupt a running Claudeflare
+process or service under any circumstances unless the user explicitly and
+directly instructs you to do so. A request to build, test, deploy, diagnose, or
+work on service-related code is not permission to interrupt the running service.
+
 ## Engineering Standard
 
 Always optimize for code that is:
