@@ -234,6 +234,13 @@ Typical uses:
 - request metadata persistence
 - payload persistence and post-processing writes
 
+The writer retries only transient SQLite contention (`SQLITE_BUSY`,
+`SQLITE_LOCKED`, or a `database is locked` message) after yielding for 100 ms,
+500 ms, and 1,000 ms. The retrying job stays ahead of later queued work. After
+retry exhaustion, one failure is recorded and the persisted log message includes
+the underlying SQLite error; unrelated failures are not retried. Disposal still
+flushes the queue in FIFO order.
+
 OAuth token refreshes are intentionally not queued here. The runtime account
 credential manager stores access tokens, expiry, and rotated refresh tokens
 synchronously with a credential-guarded update before any waiter resumes.

@@ -343,6 +343,15 @@ Two main mechanisms handle HTTP observability:
 - `AsyncDbWriter` for non-blocking DB writes
 - proxy post-processor worker for HTTP stream usage extraction and payload handling
 
+The post-processor controller creates one worker and does not restart it.
+Readiness or acknowledgement timeouts report `degraded` health while proxy
+traffic continues. A late readiness signal flushes the bounded startup queue;
+a worker event or posting failure stops analytics delivery for the rest of that
+controller's lifetime. This avoids Bun 1.3.14's
+[`Worker.terminate()` transpiler use-after-free](https://github.com/oven-sh/bun/issues/33936)
+while its proposed [upstream fix](https://github.com/oven-sh/bun/pull/33939)
+remains unavailable in stable Bun.
+
 WebSocket transcripts use a separate main-process recorder. It captures provider-neutral bidirectional frame envelopes, persists them in ordered chunks, and publishes request-scoped live updates only after each chunk is durable. Semantic parsing is deferred to the UI so historical transcripts benefit from future parser improvements.
 
 ## User Interfaces

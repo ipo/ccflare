@@ -7,9 +7,9 @@ import {
 import {
 	createRequestMetadata,
 	ERROR_MESSAGES,
-	type ProxyContext,
-	type ProxyAttemptOutcome,
 	getAccountAvailability,
+	type ProxyAttemptOutcome,
+	type ProxyContext,
 	prepareRequestBody,
 	proxyUnauthenticated,
 	proxyWithAccount,
@@ -52,11 +52,6 @@ let usageWorkerInstance: UsageWorkerController | null = null;
  * @returns The usage worker instance
  */
 export function getUsageWorker(): UsageWorkerTransport {
-	if (usageWorkerInstance?.isShuttingDown()) {
-		usageWorkerInstance.forceTerminate();
-		usageWorkerInstance = null;
-	}
-
 	if (!usageWorkerInstance) {
 		usageWorkerInstance = new UsageWorkerController({
 			logger: log,
@@ -94,7 +89,10 @@ export async function terminateUsageWorker(): Promise<void> {
 		try {
 			await usageWorkerInstance.terminateGracefully();
 		} finally {
-			if (usageWorkerInstance === activeWorker) {
+			if (
+				usageWorkerInstance === activeWorker &&
+				activeWorker.wasTerminatedSafely()
+			) {
 				usageWorkerInstance = null;
 			}
 		}
@@ -160,7 +158,10 @@ export async function handleProxy(
 			requestContext,
 		);
 	}
-	if (availability.kind === "cooling_down" || availability.kind === "unavailable") {
+	if (
+		availability.kind === "cooling_down" ||
+		availability.kind === "unavailable"
+	) {
 		const coolingDown = availability.kind === "cooling_down";
 		return forwardToClient(
 			{

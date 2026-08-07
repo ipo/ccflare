@@ -104,6 +104,36 @@ describe("workspace build and export contracts", () => {
 		expect(rootManifest.scripts?.build).toBe("bun run build:clients");
 	});
 
+	it("delegates source startup to app scripts that build the worker sidecar", () => {
+		const rootManifest = readJsonFile<PackageManifest>(
+			join(REPO_ROOT, "package.json"),
+		);
+		const serverManifest = readJsonFile<PackageManifest>(
+			join(APPS_ROOT, "server", "package.json"),
+		);
+		const tuiManifest = readJsonFile<PackageManifest>(
+			join(APPS_ROOT, "tui", "package.json"),
+		);
+
+		expect(rootManifest.scripts).toMatchObject({
+			start: "bun run --cwd apps/server start",
+			server: "bun run --cwd apps/server start",
+			"dev:server": "bun run --cwd apps/server dev",
+			tui: "bun run --cwd apps/tui dev",
+		});
+		expect(serverManifest.scripts?.start).toStartWith("bun run build:worker");
+		expect(serverManifest.scripts?.dev).toStartWith("bun run build:worker");
+		expect(serverManifest.scripts?.build).toStartWith("bun run build:worker");
+		expect(tuiManifest.scripts?.dev).toStartWith("bun run build:worker");
+		expect(tuiManifest.scripts?.build).toStartWith("bun run build:worker");
+		expect(serverManifest.scripts?.["build:worker"]).toContain(
+			"dist/post-processor.worker.js",
+		);
+		expect(tuiManifest.scripts?.["build:worker"]).toContain(
+			"dist/post-processor.worker.js",
+		);
+	});
+
 	it("imports dashboard assets through package exports instead of dist internals", () => {
 		const runtimeServerSrc = join(PACKAGES_ROOT, "runtime-server", "src");
 		const runtimeServerSource = readdirSync(runtimeServerSrc)

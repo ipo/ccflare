@@ -98,7 +98,7 @@ export interface AsyncWriterHealth {
 }
 
 export interface UsageWorkerHealth {
-	state: "starting" | "ready" | "shutting_down" | "stopped";
+	state: "starting" | "ready" | "degraded" | "shutting_down" | "stopped";
 	queuedMessages: number;
 	pendingAcks: number;
 	lastError: string | null;

@@ -140,6 +140,13 @@ For streaming HTTP traffic:
 - the worker parses provider-specific usage events
 - full payloads are persisted asynchronously, while only final summaries return to the main thread and request-summary SSE stream
 
+Usage analytics are best effort and never gate proxy responses. If worker
+readiness or a message acknowledgement times out, worker health becomes
+`degraded`; the worker is retained rather than restarted. Up to 1,000 messages
+can wait for readiness, and a late `ready` signal flushes them once. Worker
+errors and posting failures stop later analytics delivery without affecting the
+request path.
+
 For WebSocket traffic, the main proxy path writes ordered raw transcript chunks directly. This avoids holding an entire long-lived connection in the HTTP post-processor worker and allows an open request detail view to receive newly persisted chunks live. A separate best-effort analytics extractor aggregates recognized `response.completed` usage onto the connection row; it never changes or gates raw transcript capture.
 
 ## Event Streaming

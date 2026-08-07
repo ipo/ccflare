@@ -92,6 +92,18 @@ bun run dev:server
 bun run ccflare --add-account myaccount
 ```
 
+The root server and TUI commands delegate to their app scripts. Those scripts
+build `dist/post-processor.worker.js` before launching source code and select
+that JavaScript sidecar automatically. An explicit `CF_USAGE_WORKER_PATH` still
+takes precedence. Direct or test execution without a sidecar falls back to the
+TypeScript worker, while compiled and desktop distributions continue resolving
+the sidecar beside their executable/runtime bundle.
+
+This sidecar avoids repository TypeScript transpilation inside the worker and,
+together with degraded-on-timeout behavior, contains Bun 1.3.14's known
+[`Worker.terminate()`/transpiler defect](https://github.com/oven-sh/bun/issues/33936).
+The proposed Bun fix is [oven-sh/bun#33939](https://github.com/oven-sh/bun/pull/33939).
+
 ### Development Configuration
 
 ```bash
@@ -129,13 +141,11 @@ Compile ccflare into a single executable for easy deployment:
 # Build all components (dashboard and TUI)
 bun run build
 
-# Build the main ccflare binary (includes TUI, CLI, and server)
-cd apps/tui
-bun build src/main.ts --compile --outfile dist/ccflare --target=bun
+# Build the main ccflare binary and its worker sidecar
+bun run build:tui
 
-# Build standalone server binary (optional, server-only deployment)
-cd ../server
-bun build src/server.ts --compile --outfile dist/ccflare-server
+# Build the standalone server binary and sidecar (optional)
+bun run build:server
 
 # Copy the binary and its usage-worker sidecar to the deployment location
 cp apps/tui/dist/ccflare /opt/ccflare/

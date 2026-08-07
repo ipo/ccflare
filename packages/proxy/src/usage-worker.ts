@@ -32,7 +32,7 @@ export interface UsageWorkerLogger {
 }
 
 export interface UsageWorkerHealthSnapshot {
-	state: "starting" | "ready" | "shutting_down" | "stopped";
+	state: "starting" | "ready" | "degraded" | "shutting_down" | "stopped";
 	queuedMessages: number;
 	pendingAcks: number;
 	lastError: string | null;
@@ -52,12 +52,12 @@ type DecoratedIncomingWorkerMessage = IncomingWorkerMessage & {
 };
 
 interface PendingAck {
-	message: DecoratedIncomingWorkerMessage;
 	timer: ReturnType<typeof setTimeout>;
 }
 
 export const DEFAULT_USAGE_WORKER_READY_TIMEOUT_MS = 15_000;
 export const DEFAULT_USAGE_WORKER_ACK_TIMEOUT_MS = 15_000;
+export const MAX_USAGE_WORKER_QUEUE_SIZE = 1_000;
 
 const DEFAULT_READY_TIMEOUT_MS = Number(
 	process.env.CF_USAGE_WORKER_READY_TIMEOUT_MS ||
@@ -161,6 +161,7 @@ export class UsageWorkerController implements UsageWorkerTransport {
 	private worker: WorkerLike | null = null;
 	private ready = false;
 	private shuttingDown = false;
+	private state: UsageWorkerHealthSnapshot["state"] = "starting";
 	private generation = 0;
 	private readyTimer: ReturnType<typeof setTimeout> | null = null;
 	private shutdownTimer: ReturnType<typeof setTimeout> | null = null;
@@ -170,6 +171,8 @@ export class UsageWorkerController implements UsageWorkerTransport {
 	private resolveShutdown: (() => void) | null = null;
 	private rejectShutdown: ((error: Error) => void) | null = null;
 	private lastError: string | null = null;
+	private terminalError: Error | null = null;
+	private terminatedSafely = false;
 
 	constructor(options: UsageWorkerControllerOptions = {}) {
 		this.createWorkerImpl = options.createWorker ?? createDefaultWorker;
@@ -182,6 +185,10 @@ export class UsageWorkerController implements UsageWorkerTransport {
 	}
 
 	postMessage(message: IncomingWorkerMessage): void {
+		if (this.state === "stopped") {
+			return;
+		}
+
 		if (this.shuttingDown) {
 			this.logger.warn(
 				"Dropping usage worker message because the worker is shutting down",
@@ -195,7 +202,13 @@ export class UsageWorkerController implements UsageWorkerTransport {
 		};
 
 		if (!this.ready || !this.worker) {
-			this.queuedMessages.push(decoratedMessage);
+			if (this.queuedMessages.length < MAX_USAGE_WORKER_QUEUE_SIZE) {
+				this.queuedMessages.push(decoratedMessage);
+			} else {
+				this.logger.warn(
+					"Dropping usage worker message because the readiness queue is full",
+				);
+			}
 			return;
 		}
 
@@ -206,17 +219,13 @@ export class UsageWorkerController implements UsageWorkerTransport {
 		return this.shuttingDown;
 	}
 
-	getHealthSnapshot(): UsageWorkerHealthSnapshot {
-		const state = !this.worker
-			? "stopped"
-			: this.shuttingDown
-				? "shutting_down"
-				: this.ready
-					? "ready"
-					: "starting";
+	wasTerminatedSafely(): boolean {
+		return this.terminatedSafely;
+	}
 
+	getHealthSnapshot(): UsageWorkerHealthSnapshot {
 		return {
-			state,
+			state: this.state,
 			queuedMessages: this.queuedMessages.length,
 			pendingAcks: this.pendingAcks.size,
 			lastError: this.lastError,
@@ -227,8 +236,12 @@ export class UsageWorkerController implements UsageWorkerTransport {
 		if (this.shutdownPromise) {
 			return this.shutdownPromise;
 		}
+		if (this.terminalError) {
+			return Promise.reject(this.terminalError);
+		}
 
 		this.shuttingDown = true;
+		this.state = "shutting_down";
 		this.ready = false;
 		this.clearReadyTimer();
 		this.clearPendingAcks();
@@ -237,6 +250,7 @@ export class UsageWorkerController implements UsageWorkerTransport {
 		const worker = this.worker;
 		if (!worker) {
 			this.shuttingDown = false;
+			this.state = "stopped";
 			return Promise.resolve();
 		}
 
@@ -254,20 +268,27 @@ export class UsageWorkerController implements UsageWorkerTransport {
 		try {
 			worker.postMessage(shutdownMessage);
 		} catch (error) {
-			this.logger.debug(
-				"Failed to post shutdown message to usage worker before termination",
-				error,
+			const shutdownError = new Error(
+				`Failed to post shutdown message to usage worker: ${getErrorMessage(error)}`,
 			);
+			this.logger.error(shutdownError.message);
+			this.failShutdownWithoutTerminate(worker, shutdownError);
+			return shutdownPromise;
 		}
 
 		if (this.shutdownDelayMs <= 0) {
-			this.finishShutdown(worker);
+			this.failShutdownWithoutTerminate(
+				worker,
+				new Error(
+					"Usage worker did not confirm shutdown before the timeout elapsed",
+				),
+			);
 			return shutdownPromise;
 		}
 
 		this.shutdownTimer = setTimeout(() => {
 			this.shutdownTimer = null;
-			this.finishShutdown(
+			this.failShutdownWithoutTerminate(
 				worker,
 				new Error(
 					"Usage worker did not confirm shutdown before the timeout elapsed",
@@ -278,21 +299,6 @@ export class UsageWorkerController implements UsageWorkerTransport {
 		return shutdownPromise;
 	}
 
-	forceTerminate(): void {
-		this.shuttingDown = true;
-		this.ready = false;
-		this.clearReadyTimer();
-		this.clearPendingAcks();
-		this.queuedMessages.length = 0;
-		if (this.shutdownTimer) {
-			clearTimeout(this.shutdownTimer);
-			this.shutdownTimer = null;
-		}
-
-		const worker = this.worker;
-		this.finishShutdown(worker, new Error("Usage worker was force terminated"));
-	}
-
 	private startWorker(): void {
 		if (this.shuttingDown) {
 			return;
@@ -301,6 +307,7 @@ export class UsageWorkerController implements UsageWorkerTransport {
 		const worker = this.createWorkerImpl();
 		this.worker = worker;
 		this.ready = false;
+		this.state = "starting";
 		this.generation += 1;
 		const generation = this.generation;
 
@@ -321,13 +328,13 @@ export class UsageWorkerController implements UsageWorkerTransport {
 			this.lastError = message;
 			this.logger.error(`Usage worker crashed: ${message}`);
 			if (this.shuttingDown) {
-				this.finishShutdown(
+				this.failShutdownWithoutTerminate(
 					worker,
 					new Error(`Usage worker crashed during shutdown: ${message}`),
 				);
 				return;
 			}
-			this.restartWorker();
+			this.stopWorker(`Usage worker crashed: ${message}`);
 		};
 
 		worker.onmessageerror = () => {
@@ -338,13 +345,13 @@ export class UsageWorkerController implements UsageWorkerTransport {
 			this.lastError = "Usage worker emitted an invalid message payload";
 			this.logger.error("Usage worker emitted an invalid message payload");
 			if (this.shuttingDown) {
-				this.finishShutdown(
+				this.failShutdownWithoutTerminate(
 					worker,
 					new Error("Usage worker emitted an invalid message during shutdown"),
 				);
 				return;
 			}
-			this.restartWorker();
+			this.stopWorker("Usage worker emitted an invalid message payload");
 		};
 
 		worker.unref?.();
@@ -363,10 +370,11 @@ export class UsageWorkerController implements UsageWorkerTransport {
 				return;
 			}
 
-			this.logger.warn(
-				"Usage worker did not become ready before the liveness timeout; restarting it",
-			);
-			this.restartWorker();
+			const message =
+				"Usage worker did not become ready before the readiness timeout elapsed";
+			this.state = "degraded";
+			this.lastError = message;
+			this.logger.warn(message);
 		}, this.readyTimeoutMs);
 		unrefTimer(timer);
 		this.readyTimer = timer;
@@ -394,9 +402,9 @@ export class UsageWorkerController implements UsageWorkerTransport {
 				? this.lastError
 				: `Usage worker async writer recorded ${message.asyncWriter.failureCount} failure(s)`;
 			if (message.asyncWriter.healthy) {
-				this.finishShutdown(this.worker);
+				this.finishConfirmedShutdown(this.worker);
 			} else {
-				this.finishShutdown(
+				this.finishConfirmedShutdown(
 					this.worker,
 					new Error(
 						`Usage worker async writer recorded ${message.asyncWriter.failureCount} failure(s) during shutdown`,
@@ -412,6 +420,7 @@ export class UsageWorkerController implements UsageWorkerTransport {
 
 		if (isReadyMessage(message)) {
 			this.ready = true;
+			this.state = "ready";
 			this.lastError = null;
 			this.clearReadyTimer();
 			this.flushQueuedMessages();
@@ -426,6 +435,10 @@ export class UsageWorkerController implements UsageWorkerTransport {
 
 			clearTimeout(pendingAck.timer);
 			this.pendingAcks.delete(message.messageId);
+			if (this.state === "degraded") {
+				this.state = "ready";
+				this.lastError = null;
+			}
 			return;
 		}
 
@@ -447,16 +460,16 @@ export class UsageWorkerController implements UsageWorkerTransport {
 	}
 
 	private sendMessage(message: DecoratedIncomingWorkerMessage): void {
-		if (!this.worker) {
-			this.queuedMessages.push(message);
+		if (!this.worker || this.state === "stopped") {
 			return;
 		}
 
 		try {
 			this.worker.postMessage(message);
 		} catch (error) {
-			this.logger.error("Failed to post a message to the usage worker", error);
-			this.restartWorker();
+			const failureMessage = `Failed to post a message to the usage worker: ${getErrorMessage(error)}`;
+			this.logger.error(failureMessage);
+			this.stopWorker(failureMessage);
 			return;
 		}
 
@@ -471,64 +484,35 @@ export class UsageWorkerController implements UsageWorkerTransport {
 			}
 
 			this.pendingAcks.delete(message.messageId);
-			this.logger.warn(
-				"Usage worker became unresponsive while waiting for an acknowledgement; restarting it",
-			);
-			this.restartWorker();
+			const failureMessage =
+				"Usage worker acknowledgement did not arrive before the timeout elapsed";
+			this.state = "degraded";
+			this.lastError = failureMessage;
+			this.logger.warn(failureMessage);
 		}, this.ackTimeoutMs);
 		unrefTimer(timer);
 
 		this.pendingAcks.set(message.messageId, {
-			message,
 			timer,
 		});
 	}
 
-	private restartWorker(): void {
-		if (this.shuttingDown) {
-			return;
-		}
-
+	private stopWorker(message: string): void {
 		this.clearReadyTimer();
-
-		const pendingAckCount = this.pendingAcks.size;
-		if (pendingAckCount > 0) {
-			const requestIds = Array.from(
-				new Set(
-					Array.from(this.pendingAcks.values())
-						.map((pending) =>
-							"requestId" in pending.message
-								? pending.message.requestId
-								: undefined,
-						)
-						.filter(
-							(requestId): requestId is string => typeof requestId === "string",
-						),
-				),
-			);
-			this.logger.warn(
-				`Dropped ${pendingAckCount} in-flight usage worker messages during restart${
-					requestIds.length > 0 ? ` (${requestIds.join(", ")})` : ""
-				}`,
-			);
-		}
-
 		this.clearPendingAcks();
+		this.queuedMessages.length = 0;
 		this.ready = false;
-
-		const worker = this.worker;
 		this.worker = null;
-
-		try {
-			worker?.terminate();
-		} catch (error) {
-			this.logger.debug("Failed to terminate the usage worker cleanly", error);
-		}
-
-		this.startWorker();
+		this.generation += 1;
+		this.state = "stopped";
+		this.lastError = message;
+		this.terminalError = new Error(message);
 	}
 
-	private finishShutdown(worker: WorkerLike | null, error?: Error): void {
+	private finishConfirmedShutdown(
+		worker: WorkerLike | null,
+		error?: Error,
+	): void {
 		if (this.shutdownTimer) {
 			clearTimeout(this.shutdownTimer);
 			this.shutdownTimer = null;
@@ -541,6 +525,7 @@ export class UsageWorkerController implements UsageWorkerTransport {
 
 		try {
 			worker?.terminate();
+			this.terminatedSafely = true;
 		} catch (terminateError) {
 			if (!error) {
 				error =
@@ -552,6 +537,7 @@ export class UsageWorkerController implements UsageWorkerTransport {
 
 		this.ready = false;
 		this.shuttingDown = false;
+		this.state = "stopped";
 
 		const resolveShutdown = this.resolveShutdown;
 		const rejectShutdown = this.rejectShutdown;
@@ -561,10 +547,40 @@ export class UsageWorkerController implements UsageWorkerTransport {
 
 		if (error) {
 			this.lastError = error.message;
+			this.terminalError = error;
 			rejectShutdown?.(error);
 			return;
 		}
 
 		resolveShutdown?.();
 	}
+
+	private failShutdownWithoutTerminate(worker: WorkerLike, error: Error): void {
+		if (this.shutdownTimer) {
+			clearTimeout(this.shutdownTimer);
+			this.shutdownTimer = null;
+		}
+		if (this.worker === worker) {
+			this.worker = null;
+			this.generation += 1;
+		}
+		this.clearReadyTimer();
+		this.clearPendingAcks();
+		this.queuedMessages.length = 0;
+		this.ready = false;
+		this.shuttingDown = false;
+		this.state = "stopped";
+		this.lastError = error.message;
+		this.terminalError = error;
+
+		const rejectShutdown = this.rejectShutdown;
+		this.resolveShutdown = null;
+		this.rejectShutdown = null;
+		this.shutdownPromise = null;
+		rejectShutdown?.(error);
+	}
+}
+
+function getErrorMessage(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
 }

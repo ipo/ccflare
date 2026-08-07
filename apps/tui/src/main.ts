@@ -8,6 +8,9 @@ import { ACCOUNT_PROVIDERS } from "@ccflare/types";
 import type { AccountDisplay } from "@ccflare/ui";
 import * as tuiCore from "./core";
 import { parseArgs } from "./core";
+import { configureSourceUsageWorkerSidecar } from "./usage-worker-sidecar";
+
+configureSourceUsageWorkerSidecar();
 
 // Global singleton for auto-started server
 let runningServer: ServerHandle | null = null;

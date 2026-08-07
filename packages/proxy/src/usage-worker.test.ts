@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import {
 	DEFAULT_USAGE_WORKER_ACK_TIMEOUT_MS,
 	DEFAULT_USAGE_WORKER_READY_TIMEOUT_MS,
+	MAX_USAGE_WORKER_QUEUE_SIZE,
 	resolveUsageWorkerEntrypoint,
 	UsageWorkerController,
 	type WorkerLike,
@@ -11,13 +12,12 @@ import type {
 	ReadyMessage,
 	ShutdownCompleteMessage,
 	StartMessage,
-	SummaryMessage,
 } from "./worker-messages";
 
-function createStartMessage(): StartMessage {
+function createStartMessage(requestId = "req-1"): StartMessage {
 	return {
 		type: "start",
-		requestId: "req-1",
+		requestId,
 		accountId: "account-1",
 		accountName: "Primary account",
 		method: "POST",
@@ -27,9 +27,7 @@ function createStartMessage(): StartMessage {
 		requestHeaders: {},
 		requestBody: null,
 		responseStatus: 200,
-		responseHeaders: {
-			"content-type": "application/json",
-		},
+		responseHeaders: { "content-type": "application/json" },
 		isStream: false,
 		providerName: "openai",
 		retryAttempt: 0,
@@ -39,33 +37,24 @@ function createStartMessage(): StartMessage {
 
 async function waitFor(
 	condition: () => boolean,
-	timeoutMs = 250,
+	timeoutMs = 500,
 ): Promise<void> {
 	const deadline = Date.now() + timeoutMs;
-
 	while (Date.now() < deadline) {
-		if (condition()) {
-			return;
-		}
-
-		await Bun.sleep(5);
+		if (condition()) return;
+		await Bun.sleep(2);
 	}
-
 	throw new Error("Timed out waiting for condition");
 }
 
 class TestLogger {
 	readonly warnings: string[] = [];
 	readonly errors: string[] = [];
-
 	info(): void {}
-
 	debug(): void {}
-
 	warn(message: string): void {
 		this.warnings.push(message);
 	}
-
 	error(message: string): void {
 		this.errors.push(message);
 	}
@@ -78,47 +67,72 @@ class FakeWorker implements WorkerLike {
 	readonly postedMessages: unknown[] = [];
 	terminateCalls = 0;
 	unrefCalls = 0;
+	throwOnPost: ((message: unknown) => boolean) | null = null;
+	forbidTerminate = false;
 
 	postMessage(message: unknown): void {
+		if (this.throwOnPost?.(message)) throw new Error("post exploded");
 		this.postedMessages.push(message);
 	}
-
 	terminate(): void {
 		this.terminateCalls += 1;
+		if (this.forbidTerminate) throw new Error("terminate forbidden");
 	}
-
 	unref(): void {
 		this.unrefCalls += 1;
 	}
-
 	emitMessage(
-		message:
-			| ReadyMessage
-			| AckMessage
-			| ShutdownCompleteMessage
-			| SummaryMessage,
+		message: ReadyMessage | AckMessage | ShutdownCompleteMessage,
 	): void {
 		this.onmessage?.({ data: message } as MessageEvent<unknown>);
 	}
-
 	emitError(message: string): void {
 		this.onerror?.({ message } as ErrorEvent);
 	}
-
 	emitMessageError(data: unknown): void {
 		this.onmessageerror?.({ data } as MessageEvent<unknown>);
 	}
 }
 
-const controllers: UsageWorkerController[] = [];
+interface TestController {
+	controller: UsageWorkerController;
+	workers: FakeWorker[];
+}
+
+const testControllers: TestController[] = [];
 const originalUsageWorkerPath = process.env.CF_USAGE_WORKER_PATH;
 
-afterEach(async () => {
-	for (const controller of controllers) {
-		await controller.terminateGracefully().catch(() => {});
-	}
-	controllers.length = 0;
+function createController(
+	options: Partial<ConstructorParameters<typeof UsageWorkerController>[0]> = {},
+): TestController {
+	const workers: FakeWorker[] = [];
+	const controller = new UsageWorkerController({
+		createWorker() {
+			const worker = new FakeWorker();
+			workers.push(worker);
+			return worker;
+		},
+		readyTimeoutMs: 10_000,
+		ackTimeoutMs: 10_000,
+		shutdownDelayMs: 100,
+		logger: new TestLogger(),
+		...options,
+	});
+	const result = { controller, workers };
+	testControllers.push(result);
+	return result;
+}
 
+afterEach(async () => {
+	for (const { controller, workers } of testControllers) {
+		const shutdown = controller.terminateGracefully();
+		workers.at(-1)?.emitMessage({
+			type: "shutdown-complete",
+			asyncWriter: { healthy: true, failureCount: 0, queuedJobs: 0 },
+		});
+		await shutdown.catch(() => {});
+	}
+	testControllers.length = 0;
 	if (originalUsageWorkerPath === undefined) {
 		delete process.env.CF_USAGE_WORKER_PATH;
 	} else {
@@ -127,207 +141,195 @@ afterEach(async () => {
 });
 
 describe("UsageWorkerController", () => {
-	it("allows 15 seconds for worker readiness and acknowledgements by default", () => {
+	it("keeps the documented readiness and acknowledgement defaults", () => {
 		expect(DEFAULT_USAGE_WORKER_READY_TIMEOUT_MS).toBe(15_000);
 		expect(DEFAULT_USAGE_WORKER_ACK_TIMEOUT_MS).toBe(15_000);
 	});
 
-	it("resolves an explicit usage worker path from the environment", () => {
-		process.env.CF_USAGE_WORKER_PATH = "/tmp/post-processor.worker.js";
-
+	it("preserves explicit, compiled-sidecar, and TypeScript fallback precedence", () => {
+		process.env.CF_USAGE_WORKER_PATH = "/tmp/explicit-worker.js";
 		expect(resolveUsageWorkerEntrypoint()).toBe(
-			"file:///tmp/post-processor.worker.js",
+			"file:///tmp/explicit-worker.js",
 		);
-	});
 
-	it("resolves a usage-worker sidecar beside a compiled executable", () => {
-		const executablePath = "/opt/ccflare/ccflare-server";
+		delete process.env.CF_USAGE_WORKER_PATH;
 		expect(
 			resolveUsageWorkerEntrypoint(
-				executablePath,
+				"/opt/ccflare/ccflare-server",
 				(path) => path === "/opt/ccflare/post-processor.worker.js",
 			),
 		).toBe("file:///opt/ccflare/post-processor.worker.js");
+		expect(resolveUsageWorkerEntrypoint("/tmp/bun", () => false)).toEndWith(
+			"/post-processor.worker.ts",
+		);
 	});
 
-	it("queues outgoing messages until the worker sends ready", async () => {
-		const workers: FakeWorker[] = [];
-		const controller = new UsageWorkerController({
-			createWorker() {
-				const worker = new FakeWorker();
-				workers.push(worker);
-				return worker;
-			},
-			readyTimeoutMs: 10_000,
-			ackTimeoutMs: 10_000,
-			shutdownDelayMs: 0,
-			logger: new TestLogger(),
+	it("degrades on delayed readiness, caps the queue, and flushes it once on late ready", async () => {
+		const logger = new TestLogger();
+		const { controller, workers } = createController({
+			readyTimeoutMs: 10,
+			logger,
 		});
-		controllers.push(controller);
+		const worker = workers[0];
+		if (!worker) throw new Error("Expected worker");
+		worker.forbidTerminate = true;
 
-		controller.postMessage(createStartMessage());
+		for (let index = 0; index < MAX_USAGE_WORKER_QUEUE_SIZE + 5; index += 1) {
+			controller.postMessage(createStartMessage(`req-${index}`));
+		}
+		await waitFor(() => controller.getHealthSnapshot().state === "degraded");
 
 		expect(workers).toHaveLength(1);
-		expect(workers[0]?.postedMessages).toHaveLength(0);
-		expect(typeof workers[0]?.onerror).toBe("function");
-		expect(typeof workers[0]?.onmessageerror).toBe("function");
+		expect(worker.terminateCalls).toBe(0);
+		expect(controller.getHealthSnapshot().queuedMessages).toBe(1_000);
+		expect(
+			logger.warnings.filter((message) => message.includes("queue is full")),
+		).toHaveLength(5);
 
-		workers[0]?.emitMessage({ type: "ready" });
-
-		expect(workers[0]?.postedMessages).toHaveLength(1);
-		expect(workers[0]?.postedMessages[0]).toMatchObject({
-			type: "start",
-			requestId: "req-1",
-			messageId: expect.any(String),
+		worker.emitMessage({ type: "ready" });
+		expect(worker.postedMessages).toHaveLength(1_000);
+		expect(controller.getHealthSnapshot()).toMatchObject({
+			state: "ready",
+			queuedMessages: 0,
+			lastError: null,
 		});
+		worker.emitMessage({ type: "ready" });
+		expect(worker.postedMessages).toHaveLength(1_000);
+
+		worker.emitError("test cleanup");
+		expect(worker.terminateCalls).toBe(0);
 	});
 
-	it("restarts the worker when the ready handshake never arrives", async () => {
-		const workers: FakeWorker[] = [];
-		const logger = new TestLogger();
-		const controller = new UsageWorkerController({
-			createWorker() {
-				const worker = new FakeWorker();
-				workers.push(worker);
-				return worker;
-			},
-			readyTimeoutMs: 15,
-			ackTimeoutMs: 10_000,
-			shutdownDelayMs: 0,
-			logger,
+	it("degrades one timed-out ACK without resend and a later valid pending ACK restores ready", async () => {
+		const { controller, workers } = createController({ ackTimeoutMs: 40 });
+		const worker = workers[0];
+		if (!worker) throw new Error("Expected worker");
+		worker.emitMessage({ type: "ready" });
+		controller.postMessage(createStartMessage("first"));
+		await Bun.sleep(25);
+		controller.postMessage(createStartMessage("second"));
+		await waitFor(() => controller.getHealthSnapshot().state === "degraded");
+
+		expect(workers).toHaveLength(1);
+		expect(worker.terminateCalls).toBe(0);
+		expect(worker.postedMessages).toHaveLength(2);
+		expect(controller.getHealthSnapshot().pendingAcks).toBe(1);
+
+		const second = worker.postedMessages[1] as { messageId: string };
+		worker.emitMessage({
+			type: "ack",
+			messageId: second.messageId,
+			acknowledgedType: "start",
 		});
-		controllers.push(controller);
-
-		await waitFor(() => workers.length >= 2);
-		workers[1]?.emitMessage({ type: "ready" });
-
-		expect(workers[0]?.terminateCalls).toBe(1);
-		expect(logger.warnings).toContain(
-			"Usage worker did not become ready before the liveness timeout; restarting it",
-		);
+		expect(controller.getHealthSnapshot()).toMatchObject({
+			state: "ready",
+			pendingAcks: 0,
+			lastError: null,
+		});
+		expect(worker.postedMessages).toHaveLength(2);
 	});
 
-	it("restarts the worker when an acknowledgement does not arrive", async () => {
-		const workers: FakeWorker[] = [];
-		const logger = new TestLogger();
-		const controller = new UsageWorkerController({
-			createWorker() {
-				const worker = new FakeWorker();
-				workers.push(worker);
-				return worker;
-			},
-			readyTimeoutMs: 10_000,
-			ackTimeoutMs: 15,
-			shutdownDelayMs: 0,
-			logger,
-		});
-		controllers.push(controller);
-
-		workers[0]?.emitMessage({ type: "ready" });
+	it("stops on worker errors, clears pending ACKs, and drops later sends", () => {
+		const { controller, workers } = createController();
+		const worker = workers[0];
+		if (!worker) throw new Error("Expected worker");
+		worker.emitMessage({ type: "ready" });
 		controller.postMessage(createStartMessage());
+		expect(controller.getHealthSnapshot().pendingAcks).toBe(1);
 
-		await waitFor(() => workers.length >= 2);
-		workers[1]?.emitMessage({ type: "ready" });
-
-		expect(workers[0]?.terminateCalls).toBe(1);
-		expect(logger.warnings).toContain(
-			"Usage worker became unresponsive while waiting for an acknowledgement; restarting it",
-		);
-	});
-
-	it("restarts the worker after worker errors and message errors", async () => {
-		const workers: FakeWorker[] = [];
-		const logger = new TestLogger();
-		const controller = new UsageWorkerController({
-			createWorker() {
-				const worker = new FakeWorker();
-				workers.push(worker);
-				return worker;
-			},
-			readyTimeoutMs: 10_000,
-			ackTimeoutMs: 10_000,
-			shutdownDelayMs: 0,
-			logger,
+		worker.emitError("worker crashed");
+		expect(controller.getHealthSnapshot()).toMatchObject({
+			state: "stopped",
+			queuedMessages: 0,
+			pendingAcks: 0,
 		});
-		controllers.push(controller);
-
-		workers[0]?.emitMessage({ type: "ready" });
-		workers[0]?.emitError("worker crashed");
-
-		await waitFor(() => workers.length >= 2);
-		workers[1]?.emitMessage({ type: "ready" });
-		workers[1]?.emitMessageError({ bad: true });
-
-		await waitFor(() => workers.length >= 3);
-		workers[2]?.emitMessage({ type: "ready" });
-
-		expect(logger.errors).toEqual([
-			"Usage worker crashed: worker crashed",
-			"Usage worker emitted an invalid message payload",
-		]);
+		controller.postMessage(createStartMessage("later"));
+		expect(workers).toHaveLength(1);
+		expect(worker.postedMessages).toHaveLength(1);
+		expect(worker.terminateCalls).toBe(0);
 	});
 
-	it("awaits shutdown completion before terminating the worker", async () => {
-		const workers: FakeWorker[] = [];
-		const controller = new UsageWorkerController({
-			createWorker() {
-				const worker = new FakeWorker();
-				workers.push(worker);
-				return worker;
-			},
-			readyTimeoutMs: 10_000,
-			ackTimeoutMs: 10_000,
+	it("stops on message errors and clears the readiness queue", () => {
+		const { controller, workers } = createController();
+		const worker = workers[0];
+		if (!worker) throw new Error("Expected worker");
+		controller.postMessage(createStartMessage());
+		expect(controller.getHealthSnapshot().queuedMessages).toBe(1);
+
+		worker.emitMessageError({ invalid: true });
+		expect(controller.getHealthSnapshot()).toMatchObject({
+			state: "stopped",
+			queuedMessages: 0,
+			pendingAcks: 0,
+		});
+		controller.postMessage(createStartMessage("later"));
+		expect(workers).toHaveLength(1);
+		expect(worker.postedMessages).toHaveLength(0);
+		expect(worker.terminateCalls).toBe(0);
+	});
+
+	it("stops and clears the startup queue after a synchronous analytics post failure", () => {
+		const { controller, workers } = createController();
+		const worker = workers[0];
+		if (!worker) throw new Error("Expected worker");
+		worker.throwOnPost = (message) =>
+			(message as { type?: string }).type !== "shutdown";
+
+		controller.postMessage(createStartMessage());
+		expect(controller.getHealthSnapshot().queuedMessages).toBe(1);
+		worker.emitMessage({ type: "ready" });
+		expect(controller.getHealthSnapshot()).toMatchObject({
+			state: "stopped",
+			queuedMessages: 0,
+			pendingAcks: 0,
+			lastError: "Failed to post a message to the usage worker: post exploded",
+		});
+		controller.postMessage(createStartMessage("later"));
+		expect(workers).toHaveLength(1);
+		expect(worker.terminateCalls).toBe(0);
+	});
+
+	it("terminates only after shutdown-complete", async () => {
+		const { controller, workers } = createController({
 			shutdownDelayMs: 1_000,
-			logger: new TestLogger(),
 		});
-		controllers.push(controller);
+		const worker = workers[0];
+		if (!worker) throw new Error("Expected worker");
+		worker.emitMessage({ type: "ready" });
+		const shutdown = controller.terminateGracefully();
+		expect(worker.terminateCalls).toBe(0);
+		expect(worker.postedMessages.at(-1)).toMatchObject({ type: "shutdown" });
 
-		workers[0]?.emitMessage({ type: "ready" });
-		const shutdownPromise = controller.terminateGracefully();
-
-		expect(workers[0]?.postedMessages.at(-1)).toMatchObject({
-			type: "shutdown",
-			messageId: expect.any(String),
-		});
-		expect(workers[0]?.terminateCalls).toBe(0);
-
-		workers[0]?.emitMessage({
+		worker.emitMessage({
 			type: "shutdown-complete",
-			asyncWriter: {
-				healthy: true,
-				failureCount: 0,
-				queuedJobs: 0,
-			},
+			asyncWriter: { healthy: true, failureCount: 0, queuedJobs: 0 },
 		});
-
-		await shutdownPromise;
-		expect(workers[0]?.terminateCalls).toBe(1);
-		expect(controller.getHealthSnapshot().state).toBe("stopped");
+		await shutdown;
+		expect(worker.terminateCalls).toBe(1);
+		expect(controller.wasTerminatedSafely()).toBe(true);
 	});
 
-	it("rejects graceful shutdown when the worker never confirms completion", async () => {
-		const workers: FakeWorker[] = [];
-		const controller = new UsageWorkerController({
-			createWorker() {
-				const worker = new FakeWorker();
-				workers.push(worker);
-				return worker;
-			},
-			readyTimeoutMs: 10_000,
-			ackTimeoutMs: 10_000,
-			shutdownDelayMs: 15,
-			logger: new TestLogger(),
-		});
-		controllers.push(controller);
-
-		workers[0]?.emitMessage({ type: "ready" });
-
+	it("rejects shutdown timeout without terminating", async () => {
+		const { controller, workers } = createController({ shutdownDelayMs: 10 });
+		const worker = workers[0];
+		if (!worker) throw new Error("Expected worker");
 		await expect(controller.terminateGracefully()).rejects.toThrow(
 			"Usage worker did not confirm shutdown before the timeout elapsed",
 		);
-		expect(workers[0]?.terminateCalls).toBe(1);
-		expect(controller.getHealthSnapshot().lastError).toBe(
-			"Usage worker did not confirm shutdown before the timeout elapsed",
+		expect(worker.terminateCalls).toBe(0);
+		expect(controller.getHealthSnapshot().state).toBe("stopped");
+	});
+
+	it("rejects a failed shutdown post without terminating", async () => {
+		const { controller, workers } = createController();
+		const worker = workers[0];
+		if (!worker) throw new Error("Expected worker");
+		worker.throwOnPost = (message) =>
+			(message as { type?: string }).type === "shutdown";
+
+		await expect(controller.terminateGracefully()).rejects.toThrow(
+			"Failed to post shutdown message to usage worker: post exploded",
 		);
+		expect(worker.terminateCalls).toBe(0);
 	});
 });
