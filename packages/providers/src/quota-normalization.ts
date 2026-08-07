@@ -30,6 +30,10 @@ const RESET_AFTER_KEYS = [
 	"resets_after_seconds",
 	"resetsAfterSeconds",
 ] as const;
+const WINDOW_SECONDS_KEYS = [
+	"limit_window_seconds",
+	"limitWindowSeconds",
+] as const;
 
 function asRecord(value: unknown): UnknownRecord | undefined {
 	return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -82,6 +86,35 @@ function displayName(value: string): string {
 	return value
 		.replaceAll(/[-_]+/g, " ")
 		.replaceAll(/\b\w/g, (character) => character.toUpperCase());
+}
+
+function periodFromWindowSeconds(record: UnknownRecord): string | undefined {
+	const seconds = finiteNumber(firstValue([record], WINDOW_SECONDS_KEYS));
+	if (seconds === undefined || seconds <= 0 || !Number.isInteger(seconds)) {
+		return undefined;
+	}
+
+	const units = [
+		{ seconds: 24 * 60 * 60, suffix: "d" },
+		{ seconds: 60 * 60, suffix: "h" },
+		{ seconds: 60, suffix: "m" },
+	] as const;
+	for (const unit of units) {
+		if (seconds % unit.seconds === 0) {
+			return `${seconds / unit.seconds}${unit.suffix}`;
+		}
+	}
+	return `${seconds}s`;
+}
+
+function codexWindowLabel(
+	period: string,
+	role: "primary" | "secondary",
+): string {
+	if (period === "5h") return "5-hour limit";
+	if (period === "7d") return "Weekly limit";
+	if (period === "unknown") return `${displayName(role)} limit`;
+	return `${period} limit`;
 }
 
 function normalizePeriod(...values: unknown[]): string {
@@ -289,28 +322,46 @@ function codexRateWindows(
 	const windows: ProviderQuotaWindow[] = [];
 	const definitions = [
 		{
-			aliases: ["primary_window", "primaryWindow", "five_hour", "fiveHour"],
-			period: "5h",
-			label: "5-hour limit",
+			aliases: [
+				{ key: "primary_window" },
+				{ key: "primaryWindow" },
+				{ key: "five_hour", period: "5h" },
+				{ key: "fiveHour", period: "5h" },
+			],
+			role: "primary",
 		},
 		{
-			aliases: ["secondary_window", "secondaryWindow", "seven_day", "sevenDay"],
-			period: "7d",
-			label: "Weekly limit",
+			aliases: [
+				{ key: "secondary_window" },
+				{ key: "secondaryWindow" },
+				{ key: "seven_day", period: "7d" },
+				{ key: "sevenDay", period: "7d" },
+			],
+			role: "secondary",
 		},
 	] as const;
 
 	for (const definition of definitions) {
-		const record = asRecord(firstValue([rateLimit], definition.aliases));
+		const alias = definition.aliases.find(
+			(candidate) => asRecord(rateLimit[candidate.key]) !== undefined,
+		);
+		const record = alias ? asRecord(rateLimit[alias.key]) : undefined;
 		if (!record) continue;
+		const period =
+			periodFromWindowSeconds(record) ??
+			(alias && "period" in alias ? alias.period : undefined) ??
+			"unknown";
+		const label = codexWindowLabel(period, definition.role);
+		const baseId = `codex:${scope}:${slug(qualifier)}:${period}`;
+		const id = windows.some((candidate) => candidate.id === baseId)
+			? `${baseId}:${definition.role}`
+			: baseId;
 		addUnique(
 			windows,
 			buildWindow({
-				id: `codex:${scope}:${slug(qualifier)}:${definition.period}`,
-				label: labelPrefix
-					? `${labelPrefix} ${definition.label.toLowerCase()}`
-					: definition.label,
-				period: definition.period,
+				id,
+				label: labelPrefix ? `${labelPrefix} ${label.toLowerCase()}` : label,
+				period,
 				scope,
 				model,
 				collectedAt,

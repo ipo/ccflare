@@ -128,8 +128,25 @@ describe("CodexProvider", () => {
 				...(request.url.endsWith("/usage")
 					? {
 							rate_limit: {
-								primary_window: { used_percent: 15 },
+								primary_window: {
+									used_percent: 15,
+									limit_window_seconds: 604_800,
+								},
+								secondary_window: null,
 							},
+							additional_rate_limits: [
+								{
+									limit_name: "GPT-5.3-Codex-Spark",
+									metered_feature: "codex_bengalfox",
+									rate_limit: {
+										primary_window: {
+											used_percent: 0,
+											limit_window_seconds: 604_800,
+										},
+										secondary_window: null,
+									},
+								},
+							],
 						}
 					: {}),
 				id_token: "must-not-leak",
@@ -159,14 +176,38 @@ describe("CodexProvider", () => {
 		expect(report.sources.usage.data).toEqual({
 			allowed: true,
 			token_count: 15,
-			rate_limit: { primary_window: { used_percent: 15 } },
+			rate_limit: {
+				primary_window: {
+					used_percent: 15,
+					limit_window_seconds: 604_800,
+				},
+				secondary_window: null,
+			},
+			additional_rate_limits: [
+				{
+					limit_name: "GPT-5.3-Codex-Spark",
+					metered_feature: "codex_bengalfox",
+					rate_limit: {
+						primary_window: {
+							used_percent: 0,
+							limit_window_seconds: 604_800,
+						},
+						secondary_window: null,
+					},
+				},
+			],
 			id_token: "[REDACTED]",
 		});
 		expect(report.windows).toEqual([
 			expect.objectContaining({
-				id: "codex:account:main:5h",
-				period: "5h",
+				id: "codex:account:main:7d",
+				period: "7d",
 				usedPercent: 15,
+			}),
+			expect.objectContaining({
+				id: "codex:meter:gpt-5-3-codex-spark:7d",
+				period: "7d",
+				usedPercent: 0,
 			}),
 		]);
 		expect(JSON.stringify(report)).not.toContain("must-not-leak");

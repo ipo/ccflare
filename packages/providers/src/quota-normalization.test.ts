@@ -87,11 +87,13 @@ describe("normalizeQuotaWindows", () => {
 					rate_limit: {
 						primary_window: {
 							used_percent: 11,
+							limit_window_seconds: 18_000,
 							reset_at: 1_775_606_400,
 						},
 						secondary_window: {
 							used: 2,
 							limit: 10,
+							limit_window_seconds: 604_800,
 							reset_after_seconds: 3600,
 						},
 					},
@@ -99,15 +101,25 @@ describe("normalizeQuotaWindows", () => {
 						{
 							limit_name: "codex_bengalfox",
 							rate_limit: {
-								primary_window: { used_percent: 35 },
+								primary_window: {
+									used_percent: 35,
+									limit_window_seconds: 18_000,
+								},
 								secondary_window: { used_percent: "bad" },
 							},
 						},
 						{
 							modelName: "gpt-special",
 							rateLimit: {
-								primaryWindow: { usedPercent: "50" },
-								secondaryWindow: { used: 3, limit: 4 },
+								primaryWindow: {
+									usedPercent: "50",
+									limitWindowSeconds: 18_000,
+								},
+								secondaryWindow: {
+									used: 3,
+									limit: 4,
+									limitWindowSeconds: 604_800,
+								},
 							},
 						},
 						null,
@@ -161,6 +173,191 @@ describe("normalizeQuotaWindows", () => {
 				model: "gpt-special",
 			},
 		]);
+	});
+
+	test("uses reported durations when Codex exposes weekly primary windows only", () => {
+		const result = normalizeQuotaWindows(
+			"codex",
+			report({
+				rate_limit: {
+					primary_window: {
+						used_percent: 31,
+						limit_window_seconds: 604_800,
+						reset_after_seconds: 577_500,
+					},
+					secondary_window: null,
+				},
+				additional_rate_limits: [
+					{
+						limit_name: "GPT-5.3-Codex-Spark",
+						metered_feature: "codex_bengalfox",
+						rate_limit: {
+							primary_window: {
+								used_percent: 0,
+								limit_window_seconds: 604_800,
+							},
+							secondary_window: null,
+						},
+					},
+				],
+			}),
+		);
+
+		expect(
+			result.map(({ id, label, period, usedPercent }) => ({
+				id,
+				label,
+				period,
+				usedPercent,
+			})),
+		).toEqual([
+			{
+				id: "codex:account:main:7d",
+				label: "Weekly limit",
+				period: "7d",
+				usedPercent: 31,
+			},
+			{
+				id: "codex:meter:gpt-5-3-codex-spark:7d",
+				label: "GPT 5.3 Codex Spark weekly limit",
+				period: "7d",
+				usedPercent: 0,
+			},
+		]);
+	});
+
+	test("retains 5-hour and weekly windows for the main and Spark meters", () => {
+		const windows = normalizeQuotaWindows(
+			"codex",
+			report({
+				rate_limit: {
+					primary_window: {
+						used_percent: 10,
+						limit_window_seconds: 18_000,
+					},
+					secondary_window: {
+						used_percent: 20,
+						limit_window_seconds: 604_800,
+					},
+				},
+				additional_rate_limits: [
+					{
+						limit_name: "GPT-5.3-Codex-Spark",
+						rate_limit: {
+							primary_window: {
+								used_percent: 30,
+								limit_window_seconds: 18_000,
+							},
+							secondary_window: {
+								used_percent: 40,
+								limit_window_seconds: 604_800,
+							},
+						},
+					},
+				],
+			}),
+		);
+
+		expect(
+			windows.map(({ id, period, usedPercent }) => ({
+				id,
+				period,
+				usedPercent,
+			})),
+		).toEqual([
+			{ id: "codex:account:main:5h", period: "5h", usedPercent: 10 },
+			{ id: "codex:account:main:7d", period: "7d", usedPercent: 20 },
+			{
+				id: "codex:meter:gpt-5-3-codex-spark:5h",
+				period: "5h",
+				usedPercent: 30,
+			},
+			{
+				id: "codex:meter:gpt-5-3-codex-spark:7d",
+				period: "7d",
+				usedPercent: 40,
+			},
+		]);
+	});
+
+	test("classifies Codex windows independently of primary and secondary position", () => {
+		const result = normalizeQuotaWindows(
+			"codex",
+			report({
+				rate_limit: {
+					primary_window: {
+						used_percent: 25,
+						limit_window_seconds: 604_800,
+					},
+					secondary_window: {
+						used_percent: 50,
+						limit_window_seconds: 18_000,
+					},
+				},
+			}),
+		);
+
+		expect(result.map(({ id, period }) => ({ id, period }))).toEqual([
+			{ id: "codex:account:main:7d", period: "7d" },
+			{ id: "codex:account:main:5h", period: "5h" },
+		]);
+	});
+
+	test("does not invent Codex periods from position when durations are invalid", () => {
+		const result = normalizeQuotaWindows(
+			"codex",
+			report({
+				rate_limit: {
+					primary_window: {
+						used_percent: 10,
+						limit_window_seconds: -1,
+					},
+					secondary_window: {
+						used_percent: 20,
+						limit_window_seconds: 1.5,
+					},
+				},
+			}),
+		);
+
+		expect(
+			result.map(({ id, label, period }) => ({ id, label, period })),
+		).toEqual([
+			{
+				id: "codex:account:main:unknown",
+				label: "Primary limit",
+				period: "unknown",
+			},
+			{
+				id: "codex:account:main:unknown:secondary",
+				label: "Secondary limit",
+				period: "unknown",
+			},
+		]);
+	});
+
+	test("uses an unknown Codex period when duration metadata is absent or unusable", () => {
+		for (const duration of [undefined, 0, "not-a-duration"]) {
+			const primaryWindow: Record<string, unknown> = { used_percent: 10 };
+			if (duration !== undefined) {
+				primaryWindow.limit_window_seconds = duration;
+			}
+
+			expect(
+				normalizeQuotaWindows(
+					"codex",
+					report({ rate_limit: { primary_window: primaryWindow } }),
+				),
+			).toEqual([
+				{
+					id: "codex:account:main:unknown",
+					label: "Primary limit",
+					period: "unknown",
+					scope: "account",
+					usedPercent: 10,
+				},
+			]);
+		}
 	});
 
 	test("accepts object-mapped Codex meters", () => {
@@ -304,9 +501,9 @@ describe("normalizeQuotaWindows", () => {
 			),
 		).toEqual([
 			{
-				id: "codex:account:main:5h",
-				label: "5-hour limit",
-				period: "5h",
+				id: "codex:account:main:unknown",
+				label: "Primary limit",
+				period: "unknown",
 				scope: "account",
 				usedPercent: 10,
 			},
