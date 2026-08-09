@@ -153,52 +153,51 @@ export async function forwardToClient(
 	});
 
 	/*********************************************************************
-	 *  STREAMING RESPONSES — tee with Response.clone() and send chunks
+	 *  STREAMING RESPONSES — observe one backpressured client stream
 	 *********************************************************************/
 	if (isStream && response.body) {
-		// Clone response once for background consumption.
-		const analyticsClone = response.clone();
+		const analyticsTransform = new TransformStream<Uint8Array, Uint8Array>({
+			transform(chunk, controller) {
+				const chunkMsg: ChunkMessage = {
+					type: "chunk",
+					requestId,
+					data: chunk,
+				};
+				ctx.usageWorker.postMessage(chunkMsg);
+				controller.enqueue(chunk);
+			},
+		});
 
-		const backgroundTask = (async () => {
-			try {
-				const reader = analyticsClone.body?.getReader();
-				if (!reader) return; // Safety check
-				// eslint-disable-next-line no-constant-condition
-				while (true) {
-					const { value, done } = await reader.read();
-					if (done) break;
-					if (value) {
-						const chunkMsg: ChunkMessage = {
-							type: "chunk",
-							requestId,
-							data: value,
-						};
-						ctx.usageWorker.postMessage(chunkMsg);
-					}
-				}
-				// Finished without errors
-				const endMsg: EndMessage = {
-					type: "end",
-					requestId,
-					preExtractedModel,
-					success: isExpectedResponse(path, analyticsClone),
-				};
-				ctx.usageWorker.postMessage(endMsg);
-			} catch (err) {
-				const endMsg: EndMessage = {
-					type: "end",
-					requestId,
-					preExtractedModel,
-					success: false,
-					error: (err as Error).message,
-				};
-				ctx.usageWorker.postMessage(endMsg);
-			}
-		})();
+		const sendEnd = (success: boolean, error?: unknown): void => {
+			const endMsg: EndMessage = {
+				type: "end",
+				requestId,
+				preExtractedModel,
+				success,
+				...(success
+					? {}
+					: {
+							error:
+								error instanceof Error
+									? error.message
+									: String(error ?? "Streaming response did not complete"),
+						}),
+			};
+			ctx.usageWorker.postMessage(endMsg);
+		};
+		const backgroundTask = response.body
+			.pipeTo(analyticsTransform.writable)
+			.then(
+				() => sendEnd(isExpectedResponse(path, response)),
+				(error) => sendEnd(false, error),
+			);
 		trackProxyBackgroundTask(backgroundTask);
 
-		// Return the sanitized response
-		return response;
+		return new Response(analyticsTransform.readable, {
+			status: response.status,
+			statusText: response.statusText,
+			headers: response.headers,
+		});
 	}
 
 	/*********************************************************************

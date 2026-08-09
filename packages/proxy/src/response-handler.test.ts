@@ -163,6 +163,184 @@ describe("forwardToClient", () => {
 		expect(endMessage).not.toHaveProperty("responseBody");
 	});
 
+	it("streams ordered chunks without cloning the response", async () => {
+		const messages: unknown[] = [];
+		const encoder = new TextEncoder();
+		const originalClone = Response.prototype.clone;
+		let response: Response;
+
+		Response.prototype.clone = function cloneMustNotRun(): Response {
+			throw new Error("streaming response was cloned");
+		};
+		try {
+			response = await forwardToClient(
+				{
+					requestId: "req-stream-no-clone",
+					method: "POST",
+					path: "/v1/codex/responses",
+					account: null,
+					requestHeaders: new Headers({
+						"content-type": "application/json",
+					}),
+					requestBody: encoder.encode(
+						JSON.stringify({ model: "gpt-5", stream: true }),
+					).buffer,
+					response: new Response(
+						new ReadableStream<Uint8Array>({
+							start(controller) {
+								controller.enqueue(encoder.encode("first"));
+								controller.enqueue(encoder.encode("-second"));
+								controller.close();
+							},
+						}),
+						{ status: 200 },
+					),
+					timestamp: Date.now(),
+					retryAttempt: 0,
+					failoverAttempts: 0,
+					upstreamRequestIsStreaming: true,
+				},
+				createResolvedProxyContext(messages),
+			);
+		} finally {
+			Response.prototype.clone = originalClone;
+		}
+
+		expect(await response.text()).toBe("first-second");
+		await waitForProxyBackgroundTasks();
+
+		const lifecycleMessages = messages.filter(
+			(
+				message,
+			): message is { type: string; data?: Uint8Array; success?: boolean } =>
+				typeof message === "object" && message !== null && "type" in message,
+		);
+		expect(lifecycleMessages.map((message) => message.type)).toEqual([
+			"start",
+			"chunk",
+			"chunk",
+			"end",
+		]);
+		expect(
+			lifecycleMessages
+				.filter(
+					(message): message is { type: "chunk"; data: Uint8Array } =>
+						message.type === "chunk" && message.data instanceof Uint8Array,
+				)
+				.map((message) => Buffer.from(message.data).toString())
+				.join(""),
+		).toBe("first-second");
+		expect(lifecycleMessages.at(-1)).toMatchObject({
+			type: "end",
+			success: true,
+		});
+	});
+
+	it("finalizes a failed stream exactly once after an upstream error", async () => {
+		const messages: unknown[] = [];
+		const response = await forwardToClient(
+			{
+				requestId: "req-stream-error",
+				method: "POST",
+				path: "/v1/codex/responses",
+				account: null,
+				requestHeaders: new Headers({ "content-type": "application/json" }),
+				requestBody: new TextEncoder().encode(
+					JSON.stringify({ model: "gpt-5", stream: true }),
+				).buffer,
+				response: new Response(
+					new ReadableStream<Uint8Array>({
+						start(controller) {
+							controller.error(new Error("upstream stream failed"));
+						},
+					}),
+					{ status: 200 },
+				),
+				timestamp: Date.now(),
+				retryAttempt: 0,
+				failoverAttempts: 0,
+				upstreamRequestIsStreaming: true,
+			},
+			createResolvedProxyContext(messages),
+		);
+
+		await expect(response.text()).rejects.toThrow("upstream stream failed");
+		await waitForProxyBackgroundTasks();
+
+		const endMessages = messages.filter(
+			(message): message is { type: "end"; success: boolean; error?: string } =>
+				typeof message === "object" &&
+				message !== null &&
+				"type" in message &&
+				message.type === "end",
+		);
+		expect(endMessages).toEqual([
+			expect.objectContaining({
+				type: "end",
+				success: false,
+				error: "upstream stream failed",
+			}),
+		]);
+	});
+
+	it("finalizes a cancelled client stream exactly once", async () => {
+		const messages: unknown[] = [];
+		let cancelReason: unknown;
+		const response = await forwardToClient(
+			{
+				requestId: "req-stream-cancel",
+				method: "POST",
+				path: "/v1/codex/responses",
+				account: null,
+				requestHeaders: new Headers({ "content-type": "application/json" }),
+				requestBody: new TextEncoder().encode(
+					JSON.stringify({ model: "gpt-5", stream: true }),
+				).buffer,
+				response: new Response(
+					new ReadableStream<Uint8Array>({
+						start(controller) {
+							controller.enqueue(new TextEncoder().encode("partial"));
+						},
+						cancel(reason) {
+							cancelReason = reason;
+						},
+					}),
+					{ status: 200 },
+				),
+				timestamp: Date.now(),
+				retryAttempt: 0,
+				failoverAttempts: 0,
+				upstreamRequestIsStreaming: true,
+			},
+			createResolvedProxyContext(messages),
+		);
+		const reader = response.body?.getReader();
+		if (!reader) throw new Error("Expected a streaming response body");
+		expect(new TextDecoder().decode((await reader.read()).value)).toBe(
+			"partial",
+		);
+
+		const reason = new Error("client stopped reading");
+		await reader.cancel(reason);
+		await waitForProxyBackgroundTasks();
+
+		expect(cancelReason).toBe(reason);
+		const endMessages = messages.filter(
+			(message): message is { type: "end"; success: boolean; error?: string } =>
+				typeof message === "object" &&
+				message !== null &&
+				"type" in message &&
+				message.type === "end",
+		);
+		expect(endMessages).toEqual([
+			expect.objectContaining({
+				type: "end",
+				success: false,
+				error: "client stopped reading",
+			}),
+		]);
+	});
+
 	it("includes the account name in the worker start message and start event", async () => {
 		const messages: unknown[] = [];
 		const events: unknown[] = [];

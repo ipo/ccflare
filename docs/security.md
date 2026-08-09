@@ -317,41 +317,38 @@ const payload = {
 // Streaming responses (current implementation)
 // packages/proxy/src/response-handler.ts
 if (isStream && response.body) {
-    // Clone response for background analytics consumption
-    const analyticsClone = response.clone();
-    
-    (async () => {
-        try {
-            const reader = analyticsClone.body?.getReader();
-            if (!reader) return;
-            
-            while (true) {
-                const { value, done } = await reader.read();
-                if (done) break;
-                if (value) {
-                    // Send chunks to worker for processing
-                    const chunkMsg: ChunkMessage = {
-                        type: "chunk",
-                        requestId,
-                        data: value,
-                    };
-                    ctx.usageWorker.postMessage(chunkMsg);
-                }
-            }
-        } catch (err) {
-            // Handle errors...
+    // Observe the one backpressured stream delivered to the client.
+    const analyticsTransform = new TransformStream({
+        transform(chunk, controller) {
+            ctx.usageWorker.postMessage({
+                type: "chunk",
+                requestId,
+                data: chunk,
+            });
+            controller.enqueue(chunk);
         }
-    })();
-    
-    // Return original response untouched
-    return response;
+    });
+
+    const backgroundTask = response.body
+        .pipeTo(analyticsTransform.writable)
+        .then(
+            () => sendEnd(true),
+            error => sendEnd(false, error),
+        );
+    trackProxyBackgroundTask(backgroundTask);
+
+    return new Response(analyticsTransform.readable, {
+        status: response.status,
+        statusText: response.statusText,
+        headers: response.headers,
+    });
 }
 ```
 
 **Privacy Concerns**: 
 - Full request/response bodies are stored, potentially containing sensitive information
-- Streaming responses are cloned and processed chunk by chunk in background workers
-- Chunks are accumulated in memory without explicit size limits in the worker process
+- Streaming responses are observed and processed chunk by chunk in background workers
+- Captured chunks are bounded in the worker process
 - Request bodies are encoded as base64 in logs
 - Error payloads include full error details and request metadata
 - Asynchronous writes may delay data persistence
@@ -606,10 +603,10 @@ function addSecurityHeaders(response: Response): Response {
 - **Implementation**: Applied in Anthropic provider's `prepareProxyResponse` method
 
 ### Streaming Response Processing (Current)
-- **Change**: Streaming responses are cloned and processed in background workers
-- **Security Consideration**: Chunks are accumulated in memory without explicit size limits, though processed incrementally
-- **Implementation**: Uses Response.clone() to avoid blocking the original stream
-- **Recommendation**: Implement memory monitoring and chunk size limits in worker
+- **Change**: Streaming responses pass through one backpressured transform that mirrors chunks to the background worker
+- **Security Consideration**: Worker payload capture is bounded while the provider-native client stream remains unmodified
+- **Implementation**: Avoids `Response.clone()` and its independent tee; normal completion, upstream failure, and client cancellation finalize the same tracked pipeline
+- **Recommendation**: Continue monitoring worker memory and preserve the existing capture bounds
 
 ### Session-Based OAuth Flow
 - **Change**: Migrated from direct account creation to session-based OAuth endpoints
