@@ -127,15 +127,16 @@ These environment variables are not stored in the configuration file and must be
 | `CF_STREAM_USAGE_BUFFER_KB` | Stream usage buffer size in KB | `64` | `CF_STREAM_USAGE_BUFFER_KB=128` |
 | `CF_STREAM_TIMEOUT_MS` | Stream processing timeout in milliseconds | `60000` (1 minute) | `CF_STREAM_TIMEOUT_MS=120000` |
 | `CF_USAGE_WORKER_PATH` | Explicit usage-worker entrypoint; overrides automatic source and compiled sidecar selection | TypeScript fallback when no sidecar exists | `CF_USAGE_WORKER_PATH=/opt/ccflare/custom-worker.js` |
+| `CF_RETENTION_WORKER_PATH` | Explicit retention-worker entrypoint; overrides automatic source and compiled sidecar selection | TypeScript fallback when no sidecar exists | `CF_RETENTION_WORKER_PATH=/opt/ccflare/retention-cleanup.worker.js` |
 | `CF_USAGE_WORKER_READY_TIMEOUT_MS` | Time allowed for readiness before analytics health becomes `degraded`; the worker is not restarted | `15000` (15 seconds) | `CF_USAGE_WORKER_READY_TIMEOUT_MS=30000` |
 | `CF_USAGE_WORKER_ACK_TIMEOUT_MS` | Time allowed for acknowledgement before analytics health becomes `degraded`; the message is not resent | `15000` (15 seconds) | `CF_USAGE_WORKER_ACK_TIMEOUT_MS=30000` |
 
 The timeout behavior intentionally contains a Bun 1.3.14 worker-termination
 defect ([oven-sh/bun#33936](https://github.com/oven-sh/bun/issues/33936),
 proposed fix [#33939](https://github.com/oven-sh/bun/pull/33939)). Timeouts do
-not terminate or replace the worker. Normal source server and TUI commands build
-their JavaScript worker sidecar automatically; direct/test runs without that
-sidecar retain the TypeScript fallback.
+not terminate or replace the usage worker. Normal source server and TUI commands
+build both JavaScript worker sidecars automatically; direct/test runs without
+them retain TypeScript fallbacks.
 
 ## Runtime Configuration API
 
@@ -466,7 +467,7 @@ Response:
 
 Note: Payload retention applies to request/response JSON payloads. Request metadata retention controls how long rows in the `requests` table are kept (affects analytics beyond the window).
 
-Retention cleanup runs in bounded background batches. Its first pass starts
+Retention cleanup runs on a dedicated worker in bounded, child-first batches. Its first pass starts
 about 10 seconds after the server begins listening, then repeats every
 `cleanup_interval_hours` (default 6). The setting is read at startup; values
 outside 1–168 hours are clamped to that range. Cleanup never runs during boot
@@ -489,5 +490,8 @@ POST /api/maintenance/cleanup
 
 Response:
 ```json
-{ "removedRequests": 0, "removedPayloads": 123, "cutoffIso": "2025-08-20T12:34:56.000Z" }
+{ "success": true, "message": "Retention cleanup queued", "data": { "status": "accepted" } }
 ```
+
+The endpoint returns `202 Accepted` immediately. If a pass is already active,
+the response status is `already_running`; another pass is not queued.

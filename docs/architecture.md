@@ -138,8 +138,9 @@ graph TD
 Startup maintenance only reconciles WebSocket requests interrupted by a prior
 process. Retention is scheduled after `Bun.serve`: the first pass starts after
 about 10 seconds, then repeats at the configured interval. The database package
-performs one bounded delete per table per step, while the runtime yields between
-steps and prevents overlapping passes.
+performs child-first, bounded deletes on a dedicated maintenance worker. The
+worker pauses between micro-batches, backs off from foreground write contention,
+and prevents overlapping passes.
 
 ## Request Routing
 

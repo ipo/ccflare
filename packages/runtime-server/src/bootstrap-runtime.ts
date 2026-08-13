@@ -23,6 +23,10 @@ import {
 	WebSocketTranscriptRecorder,
 } from "@ccflare/proxy";
 import { AccountCredentialManager } from "./account-credential-manager";
+import {
+	createRetentionCleanupJob,
+	type RetentionCleanupJob,
+} from "./retention-cleanup-job";
 
 export type BootstrappedRuntime = {
 	config: Config;
@@ -34,6 +38,7 @@ export type BootstrappedRuntime = {
 	credentialManager: AccountCredentialManager;
 	proxyContext: ProxyContext;
 	runtimeConfig: RuntimeConfig;
+	retentionCleanupJob: RetentionCleanupJob;
 };
 
 function createRuntimeConfig(config: Config, port: number): RuntimeConfig {
@@ -113,6 +118,7 @@ export function bootstrapRuntime(
 		(provider) => providerRegistry.getProvider(provider),
 		credentialManager,
 	);
+	const retentionCleanupJob = createRetentionCleanupJob(config, dbOps, log);
 	const apiRouter = new APIRouter({
 		config,
 		dbOps,
@@ -120,6 +126,7 @@ export function bootstrapRuntime(
 		getProviders: () => providerRegistry.listProviders(),
 		credentialManager,
 		accountQuotaService,
+		retentionCleanupScheduler: retentionCleanupJob,
 		getRuntimeHealth: () => ({
 			asyncWriter: {
 				healthy: asyncWriter.isHealthy(),
@@ -157,6 +164,7 @@ export function bootstrapRuntime(
 		credentialManager,
 		proxyContext,
 		runtimeConfig,
+		retentionCleanupJob,
 	};
 }
 

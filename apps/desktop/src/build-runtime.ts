@@ -15,6 +15,13 @@ const usageWorkerEntrypoint = join(
 	"src",
 	"post-processor.worker.ts",
 );
+const retentionWorkerEntrypoint = join(
+	repoRoot,
+	"packages",
+	"runtime-server",
+	"src",
+	"retention-cleanup.worker.ts",
+);
 
 function assertBuildSucceeded(
 	result: Awaited<ReturnType<typeof Bun.build>>,
@@ -75,6 +82,12 @@ await writeSingleBundle(
 	serverEntrypoint,
 	join(runtimeDir, "server.js"),
 	"desktop server bundle",
+);
+
+await writeSingleBundle(
+	retentionWorkerEntrypoint,
+	join(runtimeDir, "retention-cleanup.worker.js"),
+	"desktop retention cleanup worker bundle",
 );
 
 await writeSingleBundle(

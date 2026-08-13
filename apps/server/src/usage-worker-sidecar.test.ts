@@ -4,13 +4,18 @@ import { configureSourceUsageWorkerSidecar } from "./usage-worker-sidecar";
 describe("server source usage worker sidecar", () => {
 	it("selects the app JavaScript sidecar when present", () => {
 		const environment: NodeJS.ProcessEnv = {};
-		let checkedPath = "";
+		const checkedPaths: string[] = [];
 		configureSourceUsageWorkerSidecar(environment, (path) => {
-			checkedPath = path;
+			checkedPaths.push(path);
 			return true;
 		});
-		expect(checkedPath).toEndWith("/apps/server/dist/post-processor.worker.js");
-		expect(environment.CF_USAGE_WORKER_PATH).toBe(checkedPath);
+		expect(environment.CF_USAGE_WORKER_PATH).toEndWith(
+			"/apps/server/dist/post-processor.worker.js",
+		);
+		expect(environment.CF_RETENTION_WORKER_PATH).toEndWith(
+			"/apps/server/dist/retention-cleanup.worker.js",
+		);
+		expect(checkedPaths).toHaveLength(2);
 	});
 
 	it("preserves an explicit override and no-sidecar fallback", () => {

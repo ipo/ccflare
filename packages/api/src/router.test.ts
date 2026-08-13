@@ -15,6 +15,9 @@ const originalFetch = globalThis.fetch;
 function createRouterContext(options?: {
 	getProvider?: ConstructorParameters<typeof APIRouter>[0]["getProvider"];
 	credentialManager?: AccountCredentialManager;
+	retentionCleanupScheduler?: ConstructorParameters<
+		typeof APIRouter
+	>[0]["retentionCleanupScheduler"];
 }) {
 	const tempDir = mkdtempSync(join(tmpdir(), "ccflare-http-api-"));
 	tempDirs.push(tempDir);
@@ -74,6 +77,7 @@ function createRouterContext(options?: {
 			getProvider,
 			getProviders: () => ["anthropic", "openai", "claude-code", "codex"],
 			credentialManager,
+			retentionCleanupScheduler: options?.retentionCleanupScheduler,
 		}),
 	};
 }
@@ -207,6 +211,31 @@ describe("APIRouter", () => {
 			"/api/analytics?providers=gemini",
 		);
 		expect(invalidProvider.status).toBe(400);
+	});
+
+	it("queues maintenance cleanup without waiting for database work", async () => {
+		const { router } = createRouterContext({
+			retentionCleanupScheduler: { runNow: () => "accepted" },
+		});
+		const response = await apiRequest(
+			router,
+			"POST",
+			"/api/maintenance/cleanup",
+		);
+		expect(response.status).toBe(202);
+		expect(await response.json()).toMatchObject({
+			success: true,
+			data: { status: "accepted" },
+		});
+	});
+
+	it("reports an unavailable maintenance worker", async () => {
+		const response = await apiRequest(
+			createRouter(),
+			"POST",
+			"/api/maintenance/cleanup",
+		);
+		expect(response.status).toBe(503);
 	});
 
 	it("returns analytics with shared bucket metadata for the 1h range", async () => {

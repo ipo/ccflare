@@ -111,7 +111,7 @@ describe("WebSocketTranscriptRepository", () => {
 
 		let removed = 0;
 		while (true) {
-			const batch = transcripts.deleteClosedOlderThanBatch(10_000, 2);
+			const batch = transcripts.deleteForRetentionBatch(10_000, null, 2);
 			expect(batch).toBeLessThanOrEqual(2);
 			removed += batch;
 			if (batch === 0) break;

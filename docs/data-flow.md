@@ -254,7 +254,7 @@ The main mechanisms are:
 - `AsyncDbWriter` for non-blocking writes
 - the proxy post-processor worker for stream/websocket usage extraction
 - the quota refresh job, which runs after listen and hourly with bounded concurrency and no overlapping runs
-- the retention cleanup job, which starts after listen and deletes expired data in bounded, non-overlapping batches
+- the retention cleanup worker, which starts after listen and deletes expired data in bounded, non-overlapping batches
 
 Quota refreshes call the shared account quota service directly rather than
 making loopback HTTP requests. They persist display snapshots for the accounts
@@ -264,11 +264,12 @@ manual rate-limit reset endpoint clears only local gating metadata, and the
 next natural provider signal can restore it.
 
 The first retention pass begins about 10 seconds after listen; later passes run
-every `cleanup_interval_hours`. A pass deletes at most one configured batch
-from each retention-owned table before yielding to the event loop. Every delete
-commits independently, so shutdown can stop between batches without rollback or
-special recovery. Startup performs no retention deletes, and automatic cleanup
-never runs `VACUUM`.
+every `cleanup_interval_hours`. The dedicated worker removes small child-table
+batches before childless request rows, pauses between cycles, and backs off when
+foreground writes hold the database. Every delete commits independently, so
+shutdown can stop between batches without rollback or special recovery. Manual
+requests coalesce with an active pass. Startup performs no retention deletes,
+and automatic cleanup never runs `VACUUM`.
 
 ### Background Persistence Flow
 

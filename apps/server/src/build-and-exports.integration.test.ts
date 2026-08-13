@@ -104,7 +104,7 @@ describe("workspace build and export contracts", () => {
 		expect(rootManifest.scripts?.build).toBe("bun run build:clients");
 	});
 
-	it("delegates source startup to app scripts that build the worker sidecar", () => {
+	it("delegates source startup to app scripts that build worker sidecars", () => {
 		const rootManifest = readJsonFile<PackageManifest>(
 			join(REPO_ROOT, "package.json"),
 		);
@@ -129,8 +129,14 @@ describe("workspace build and export contracts", () => {
 		expect(serverManifest.scripts?.["build:worker"]).toContain(
 			"dist/post-processor.worker.js",
 		);
+		expect(serverManifest.scripts?.["build:worker"]).toContain(
+			"dist/retention-cleanup.worker.js",
+		);
 		expect(tuiManifest.scripts?.["build:worker"]).toContain(
 			"dist/post-processor.worker.js",
+		);
+		expect(tuiManifest.scripts?.["build:worker"]).toContain(
+			"dist/retention-cleanup.worker.js",
 		);
 	});
 

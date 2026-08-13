@@ -20,7 +20,6 @@ import {
 	type QuotaRefreshJob,
 	startQuotaRefreshJob,
 } from "./quota-refresh-job";
-import { startRetentionCleanupJob } from "./retention-cleanup-job";
 import { createStartupBanner } from "./startup-banner";
 import { runStartupMaintenance } from "./startup-maintenance";
 
@@ -181,6 +180,7 @@ export default function startServer(
 		accountQuotaService,
 		proxyContext,
 		runtimeConfig,
+		retentionCleanupJob,
 	} = bootstrapRuntime(port, serverLog);
 
 	runStartupMaintenance(dbOps);
@@ -201,7 +201,8 @@ export default function startServer(
 		websocket: websocketProxyHandler,
 	});
 	activeAccountQuotaService = accountQuotaService;
-	stopRetentionJob = startRetentionCleanupJob(config, dbOps, log).stop;
+	retentionCleanupJob.start();
+	stopRetentionJob = () => retentionCleanupJob.stop();
 	quotaRefreshJob = startQuotaRefreshJob(dbOps, accountQuotaService, log);
 	const activePort = serverInstance.port ?? runtimeConfig.port;
 

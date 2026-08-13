@@ -455,4 +455,50 @@ describe("DatabaseOperations", () => {
 			dbOps.close();
 		}
 	});
+
+	it("removes high-fanout request children before the parent", () => {
+		const tempDir = mkdtempSync(join(tmpdir(), "ccflare-db-ops-"));
+		tempDirs.push(tempDir);
+		const dbOps = new DatabaseOperations(join(tempDir, "ccflare.db"));
+
+		try {
+			const db = dbOps.getDatabase();
+			db.run(
+				`INSERT INTO requests (
+					id, timestamp, method, path, provider, success, response_time_ms
+				) VALUES ('old-ws', 0, 'WS', '/', 'codex', 1, 1)`,
+			);
+			db.run(`INSERT INTO request_payloads (id, json) VALUES ('old-ws', '{}')`);
+			const insertChunk = db.prepare(
+				`INSERT INTO websocket_transcript_chunks VALUES (
+					'old-ws', ?, ?, ?, 0, 1, 1, X'00', 1
+				)`,
+			);
+			db.exec("BEGIN");
+			for (let index = 0; index < 30; index++) {
+				insertChunk.run(index, index, index);
+			}
+			db.exec("COMMIT");
+
+			const first = dbOps.cleanupOldRequestsStep(1, 1, 10_000);
+			expect(first).toEqual({
+				removedRequests: 0,
+				removedPayloads: 1,
+				removedTranscriptChunks: 25,
+				removedOrphanedPayloads: 0,
+			});
+			expect(
+				db.query(`SELECT 1 FROM requests WHERE id = 'old-ws'`).get(),
+			).not.toBeNull();
+
+			const second = dbOps.cleanupOldRequestsStep(1, 1, 10_000);
+			expect(second.removedTranscriptChunks).toBe(5);
+			expect(second.removedRequests).toBe(1);
+			expect(
+				db.query(`SELECT 1 FROM requests WHERE id = 'old-ws'`).get(),
+			).toBeNull();
+		} finally {
+			dbOps.close();
+		}
+	});
 });

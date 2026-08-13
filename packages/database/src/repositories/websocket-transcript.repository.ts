@@ -4,7 +4,7 @@ import type {
 } from "@ccflare/types";
 import { BaseRepository } from "./base.repository";
 
-export const WEBSOCKET_TRANSCRIPT_DELETE_BATCH_SIZE = 500;
+export const WEBSOCKET_TRANSCRIPT_DELETE_BATCH_SIZE = 25;
 
 interface WebSocketTranscriptChunkRow {
 	request_id: string;
@@ -169,8 +169,9 @@ export class WebSocketTranscriptRepository extends BaseRepository<WebSocketTrans
 		);
 	}
 
-	deleteClosedOlderThanBatch(
-		cutoffTs: number,
+	deleteForRetentionBatch(
+		payloadCutoffTs: number,
+		requestCutoffTs: number | null,
 		limit = WEBSOCKET_TRANSCRIPT_DELETE_BATCH_SIZE,
 	): number {
 		return this.runWithChanges(
@@ -181,15 +182,28 @@ export class WebSocketTranscriptRepository extends BaseRepository<WebSocketTrans
 					FROM requests
 					JOIN websocket_transcript_chunks AS chunks
 						ON chunks.request_id = requests.id
-					WHERE requests.timestamp < ?
-						AND requests.method = 'WS'
+					WHERE requests.method = 'WS'
 						AND requests.success IS NOT NULL
-						AND requests.timestamp
-							+ COALESCE(requests.response_time_ms, 0) < ?
+						AND (
+							requests.timestamp
+								+ COALESCE(requests.response_time_ms, 0) < ?
+							OR (
+								? IS NOT NULL
+								AND requests.timestamp < ?
+								AND requests.timestamp
+									+ COALESCE(requests.response_time_ms, 0) < ?
+							)
+						)
 					LIMIT ?
 				)
 			`,
-			[cutoffTs, cutoffTs, limit],
+			[
+				payloadCutoffTs,
+				requestCutoffTs,
+				requestCutoffTs,
+				requestCutoffTs,
+				limit,
+			],
 		);
 	}
 }

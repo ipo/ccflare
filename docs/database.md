@@ -330,16 +330,17 @@ The runtime performs one synchronous startup maintenance action:
 
 Retention cleanup starts only after the HTTP server is listening. Its first
 background pass begins after about 10 seconds and later passes follow the
-configured cleanup interval. Each request, payload, transcript, and orphan
-delete is bounded and committed independently, with an event-loop yield between
-batches. This keeps startup, request handling, and shutdown responsive even
-when a large retention backlog has accumulated.
+configured cleanup interval. A dedicated worker connection deletes payload and
+transcript children in small batches before deleting childless request rows,
+so foreign-key cascades cannot enlarge a transaction unexpectedly. Each delete
+commits independently, the worker pauses between batches, and lock contention
+uses a short timeout plus backoff so foreground writes take priority.
 
 Database compaction is explicit rather than automatic so startup does not rewrite a potentially large transcript database.
 
 Manual maintenance is also available through the HTTP API and dashboard:
 
-- cleanup endpoint
+- asynchronous cleanup endpoint, which queues or coalesces a worker pass
 - compact endpoint
 
 Retention is configured separately for:

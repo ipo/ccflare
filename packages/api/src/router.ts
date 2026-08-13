@@ -124,7 +124,9 @@ export class APIRouter {
 		const logsHistoryHandler = createLogsHistoryHandler();
 		const analyticsHandler = createAnalyticsHandler(this.context);
 		const requestsStreamHandler = createRequestsStreamHandler();
-		const cleanupHandler = createCleanupHandler(dbOps, config);
+		const cleanupHandler = createCleanupHandler(
+			this.context.retentionCleanupScheduler,
+		);
 		const compactHandler = createCompactHandler(dbOps);
 
 		// Pre-instantiate dynamic account handlers

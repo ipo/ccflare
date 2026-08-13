@@ -16,9 +16,9 @@ import {
 } from "../models/request-row";
 import { BaseRepository } from "./base.repository";
 
-export const REQUEST_DELETE_BATCH_SIZE = 1_000;
-export const PAYLOAD_DELETE_BATCH_SIZE = 100;
-export const ORPHANED_PAYLOAD_DELETE_BATCH_SIZE = 1_000;
+export const REQUEST_DELETE_BATCH_SIZE = 100;
+export const PAYLOAD_DELETE_BATCH_SIZE = 10;
+export const ORPHANED_PAYLOAD_DELETE_BATCH_SIZE = 10;
 
 const log = new Logger("RequestRepository");
 
@@ -784,6 +784,14 @@ export class RequestRepository extends BaseRepository<RequestData> {
 								AND timestamp + COALESCE(response_time_ms, 0) < ?
 							)
 						)
+						AND NOT EXISTS (
+							SELECT 1 FROM request_payloads
+							WHERE request_payloads.id = requests.id
+						)
+						AND NOT EXISTS (
+							SELECT 1 FROM websocket_transcript_chunks
+							WHERE websocket_transcript_chunks.request_id = requests.id
+						)
 					LIMIT ?
 				)
 			`,
@@ -827,8 +835,9 @@ export class RequestRepository extends BaseRepository<RequestData> {
 		);
 	}
 
-	deletePayloadsOlderThanBatch(
-		cutoffTs: number,
+	deletePayloadsForRetentionBatch(
+		payloadCutoffTs: number,
+		requestCutoffTs: number | null,
 		limit = PAYLOAD_DELETE_BATCH_SIZE,
 	): number {
 		return this.runWithChanges(
@@ -836,7 +845,21 @@ export class RequestRepository extends BaseRepository<RequestData> {
 				DELETE FROM request_payloads
 				WHERE id IN (
 					SELECT requests.id FROM requests
-					WHERE requests.timestamp < ?
+					WHERE (
+						requests.timestamp < ?
+						OR (
+							? IS NOT NULL
+							AND requests.timestamp < ?
+							AND (
+								requests.method != 'WS'
+								OR (
+									requests.success IS NOT NULL
+									AND requests.timestamp
+										+ COALESCE(requests.response_time_ms, 0) < ?
+								)
+							)
+						)
+					)
 						AND EXISTS (
 							SELECT 1 FROM request_payloads
 							WHERE request_payloads.id = requests.id
@@ -844,7 +867,13 @@ export class RequestRepository extends BaseRepository<RequestData> {
 					LIMIT ?
 				)
 			`,
-			[cutoffTs, limit],
+			[
+				payloadCutoffTs,
+				requestCutoffTs,
+				requestCutoffTs,
+				requestCutoffTs,
+				limit,
+			],
 		);
 	}
 }

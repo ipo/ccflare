@@ -12,4 +12,14 @@ export function configureSourceUsageWorkerSidecar(
 	) {
 		environment.CF_USAGE_WORKER_PATH = sidecarPath;
 	}
+	const retentionSidecarPath = join(
+		import.meta.dir,
+		"../dist/retention-cleanup.worker.js",
+	);
+	if (
+		environment.CF_RETENTION_WORKER_PATH === undefined &&
+		fileExists(retentionSidecarPath)
+	) {
+		environment.CF_RETENTION_WORKER_PATH = retentionSidecarPath;
+	}
 }

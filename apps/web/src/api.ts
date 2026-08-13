@@ -322,9 +322,7 @@ class API extends HttpClient {
 		const result = await this.postJson<MutationResult<CleanupResponse>>(
 			"/api/maintenance/cleanup",
 		);
-		return (
-			result.data ?? { removedRequests: 0, removedPayloads: 0, cutoffIso: "" }
-		);
+		return result.data ?? { status: "accepted" };
 	}
 
 	async compactDb(): Promise<void> {

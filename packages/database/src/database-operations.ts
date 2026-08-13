@@ -48,6 +48,8 @@ export interface RuntimeConfig {
 export interface DatabaseOperationsOptions {
 	/** The primary runtime connection owns schema setup and migrations. */
 	initializeSchema?: boolean;
+	/** Override lock waiting for low-priority or diagnostic connections. */
+	busyTimeoutMs?: number;
 }
 
 export interface RetentionCleanupStepResult {
@@ -63,6 +65,7 @@ export interface RetentionCleanupStepResult {
  */
 export class DatabaseOperations implements StrategyStore, Disposable {
 	private db: Database;
+	private readonly dbPath: string;
 	private runtime?: RuntimeConfig;
 	private closed = false;
 
@@ -78,6 +81,7 @@ export class DatabaseOperations implements StrategyStore, Disposable {
 
 	constructor(dbPath?: string, options: DatabaseOperationsOptions = {}) {
 		const resolvedPath = dbPath ?? resolveDbPath();
+		this.dbPath = resolvedPath;
 
 		// Ensure the directory exists
 		const dir = dirname(resolvedPath);
@@ -87,7 +91,7 @@ export class DatabaseOperations implements StrategyStore, Disposable {
 
 		// Configure SQLite for better concurrency
 		this.db.exec("PRAGMA foreign_keys = ON"); // Enforce declared foreign keys
-		this.db.exec("PRAGMA busy_timeout = 5000"); // Wait up to 5 seconds before throwing "database is locked"
+		this.db.exec(`PRAGMA busy_timeout = ${options.busyTimeoutMs ?? 5_000}`);
 
 		if (options.initializeSchema !== false) {
 			this.db.exec("PRAGMA journal_mode = WAL"); // Enable Write-Ahead Logging once on the primary connection
@@ -112,6 +116,10 @@ export class DatabaseOperations implements StrategyStore, Disposable {
 
 	getDatabase(): Database {
 		return this.db;
+	}
+
+	getPath(): string {
+		return this.dbPath;
 	}
 
 	// Account operations delegated to repository
@@ -580,23 +588,31 @@ export class DatabaseOperations implements StrategyStore, Disposable {
 		now = Date.now(),
 	): RetentionCleanupStepResult {
 		const payloadCutoff = now - payloadRetentionMs;
-		let removedRequests = 0;
-		if (
+		const requestCutoff =
 			typeof requestRetentionMs === "number" &&
 			Number.isFinite(requestRetentionMs)
-		) {
-			removedRequests = this.requests.deleteOlderThanBatch(
-				now - requestRetentionMs,
+				? now - requestRetentionMs
+				: null;
+		const removedPayloads = this.requests.deletePayloadsForRetentionBatch(
+			payloadCutoff,
+			requestCutoff,
+		);
+		const removedTranscriptChunks =
+			this.websocketTranscripts.deleteForRetentionBatch(
+				payloadCutoff,
+				requestCutoff,
 			);
+		const removedOrphanedPayloads = this.requests.deleteOrphanedPayloadsBatch();
+		let removedRequests = 0;
+		if (requestCutoff !== null) {
+			removedRequests = this.requests.deleteOlderThanBatch(requestCutoff);
 		}
 
 		return {
 			removedRequests,
-			removedPayloads:
-				this.requests.deletePayloadsOlderThanBatch(payloadCutoff),
-			removedTranscriptChunks:
-				this.websocketTranscripts.deleteClosedOlderThanBatch(payloadCutoff),
-			removedOrphanedPayloads: this.requests.deleteOrphanedPayloadsBatch(),
+			removedPayloads,
+			removedTranscriptChunks,
+			removedOrphanedPayloads,
 		};
 	}
 

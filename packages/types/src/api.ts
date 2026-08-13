@@ -31,9 +31,7 @@ export interface RetentionSetRequest {
 }
 
 export interface CleanupResponse {
-	removedRequests: number;
-	removedPayloads: number;
-	cutoffIso: string;
+	status: "accepted" | "already_running";
 }
 
 // Auth/OAuth API shapes

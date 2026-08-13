@@ -6,7 +6,7 @@
 	"scripts": {
 		"dev": "bun run build:worker && bun run --hot src/server.ts",
 		"start": "bun run build:worker && bun run src/server.ts",
-		"build:worker": "bun build ../../packages/proxy/src/post-processor.worker.ts --outfile dist/post-processor.worker.js --target=bun && bun -e \"import { chmodSync } from 'node:fs'; chmodSync('dist/post-processor.worker.js', 0o644)\"",
+		"build:worker": "bun build ../../packages/proxy/src/post-processor.worker.ts --outfile dist/post-processor.worker.js --target=bun && bun build ../../packages/runtime-server/src/retention-cleanup.worker.ts --outfile dist/retention-cleanup.worker.js --target=bun && bun -e \"import { chmodSync } from 'node:fs'; for (const path of ['dist/post-processor.worker.js', 'dist/retention-cleanup.worker.js']) chmodSync(path, 0o644)\"",
 		"build": "bun run build:worker && bun build src/server.ts --compile --outfile dist/ccflare-server",
 		"typecheck": "bunx tsc --noEmit"
 	},

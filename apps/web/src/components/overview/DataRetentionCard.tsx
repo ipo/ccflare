@@ -131,9 +131,9 @@ export function DataRetentionCard() {
 
 				{cleanupNow.data && (
 					<p className="text-xs text-muted-foreground">
-						Removed {cleanupNow.data.removedRequests} requests and{" "}
-						{cleanupNow.data.removedPayloads} payloads older than{" "}
-						{new Date(cleanupNow.data.cutoffIso).toLocaleString()}.
+						{cleanupNow.data.status === "accepted"
+							? "Cleanup queued."
+							: "Cleanup is already running."}
 					</p>
 				)}
 

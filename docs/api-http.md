@@ -951,7 +951,9 @@ curl "http://localhost:8080/api/analytics?range=7d&accounts=premium1,premium2&mo
 
 #### POST /api/maintenance/cleanup
 
-Run data cleanup based on configured retention settings.
+Queue background data cleanup based on configured retention settings. Returns
+`202 Accepted` immediately with `data.status` set to `accepted` or
+`already_running`. Returns `503` when the maintenance worker is unavailable.
 
 **Example:**
 ```bash

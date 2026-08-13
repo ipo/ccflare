@@ -85,6 +85,10 @@ export interface AccountModelsResponse {
 	versions: ModelCatalogVersionResult[];
 }
 
+export interface RetentionCleanupScheduler {
+	runNow(): "accepted" | "already_running" | "unavailable";
+}
+
 export interface APIContext {
 	config: Config;
 	dbOps: DatabaseOperations;
@@ -92,5 +96,6 @@ export interface APIContext {
 	getProvider: (provider: AccountProvider) => Provider | undefined;
 	credentialManager: AccountCredentialManager;
 	accountQuotaService?: AccountQuotaRefresher;
+	retentionCleanupScheduler?: RetentionCleanupScheduler;
 	getRuntimeHealth?: () => RuntimeHealth;
 }

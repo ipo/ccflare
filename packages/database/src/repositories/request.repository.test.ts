@@ -522,7 +522,7 @@ describe("RequestRepository", () => {
 
 		let removed = 0;
 		while (true) {
-			const batch = repository.deletePayloadsOlderThanBatch(10_000, 2);
+			const batch = repository.deletePayloadsForRetentionBatch(10_000, null, 2);
 			expect(batch).toBeLessThanOrEqual(2);
 			removed += batch;
 			if (batch === 0) break;

@@ -93,13 +93,14 @@ bun run ccflare --add-account myaccount
 ```
 
 The root server and TUI commands delegate to their app scripts. Those scripts
-build `dist/post-processor.worker.js` before launching source code and select
-that JavaScript sidecar automatically. An explicit `CF_USAGE_WORKER_PATH` still
-takes precedence. Direct or test execution without a sidecar falls back to the
-TypeScript worker, while compiled and desktop distributions continue resolving
-the sidecar beside their executable/runtime bundle.
+build `dist/post-processor.worker.js` and `dist/retention-cleanup.worker.js`
+before launching source code and select those JavaScript sidecars automatically.
+Explicit `CF_USAGE_WORKER_PATH` and `CF_RETENTION_WORKER_PATH` values take
+precedence. Direct or test execution without sidecars falls back to the
+TypeScript workers, while compiled and desktop distributions resolve sidecars
+beside their executable/runtime bundle.
 
-This sidecar avoids repository TypeScript transpilation inside the worker and,
+These sidecars avoid repository TypeScript transpilation inside workers and,
 together with degraded-on-timeout behavior, contains Bun 1.3.14's known
 [`Worker.terminate()`/transpiler defect](https://github.com/oven-sh/bun/issues/33936).
 The proposed Bun fix is [oven-sh/bun#33939](https://github.com/oven-sh/bun/pull/33939).
@@ -141,18 +142,20 @@ Compile ccflare into a single executable for easy deployment:
 # Build all components (dashboard and TUI)
 bun run build
 
-# Build the main ccflare binary and its worker sidecar
+# Build the main ccflare binary and its worker sidecars
 bun run build:tui
 
-# Build the standalone server binary and sidecar (optional)
+# Build the standalone server binary and sidecars (optional)
 bun run build:server
 
-# Copy the binary and its usage-worker sidecar to the deployment location
+# Copy the binary and its worker sidecars to the deployment location
 cp apps/tui/dist/ccflare /opt/ccflare/
 cp apps/tui/dist/post-processor.worker.js /opt/ccflare/
+cp apps/tui/dist/retention-cleanup.worker.js /opt/ccflare/
 # Set runtime permissions
 chmod +x /opt/ccflare/ccflare
 chmod 644 /opt/ccflare/post-processor.worker.js
+chmod 644 /opt/ccflare/retention-cleanup.worker.js
 ```
 
 #### Binary Deployment Structure
@@ -161,6 +164,7 @@ chmod 644 /opt/ccflare/post-processor.worker.js
 /opt/ccflare/
 ├── ccflare                  # Main binary (TUI + CLI + Server)
 ├── post-processor.worker.js # HTTP payload/usage persistence worker
+├── retention-cleanup.worker.js # Low-priority retention worker
 ├── config/
 │   └── config.json     # Configuration (optional)
 └── data/
@@ -312,11 +316,13 @@ RUN useradd -r -s /bin/false ccflare
 # Copy binary and dashboard
 COPY --from=builder /app/apps/tui/dist/ccflare /usr/local/bin/ccflare
 COPY --from=builder /app/apps/tui/dist/post-processor.worker.js /usr/local/bin/post-processor.worker.js
+COPY --from=builder /app/apps/tui/dist/retention-cleanup.worker.js /usr/local/bin/retention-cleanup.worker.js
 COPY --from=builder /app/apps/web/dist /opt/ccflare/dashboard
 
 # Set permissions
 RUN chmod +x /usr/local/bin/ccflare \
-    && chmod 644 /usr/local/bin/post-processor.worker.js
+    && chmod 644 /usr/local/bin/post-processor.worker.js \
+    && chmod 644 /usr/local/bin/retention-cleanup.worker.js
 
 # Create data directories
 RUN mkdir -p /data /config && chown -R ccflare:ccflare /data /config
