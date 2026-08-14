@@ -178,14 +178,16 @@ describe("Codex catalog overlay", () => {
 
 	it("clears Codex-only metadata for every external model", () => {
 		for (const slug of [...anthropicModels, ...kimiModels]) {
-			expect(entry(slug)).toMatchObject({
+			const externalModel = entry(slug);
+			expect(externalModel).toMatchObject({
 				support_verbosity: false,
 				comp_hash: null,
 				tool_mode: "direct",
-				supports_search_tool: false,
 				supports_parallel_tool_calls: true,
 				experimental_supported_tools: [],
 			});
+			expect(externalModel).not.toHaveProperty("apply_patch_tool_type");
+			expect(externalModel).not.toHaveProperty("supports_search_tool");
 		}
 		for (const slug of anthropicModels) {
 			expect(entry(slug).use_responses_lite).toBe(true);
