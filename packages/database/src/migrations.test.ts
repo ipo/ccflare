@@ -107,6 +107,30 @@ function encode(value: string): string {
 }
 
 describe("database schema", () => {
+	it("adds nullable oauth_subject idempotently while preserving existing accounts", () => {
+		const db = new Database(":memory:");
+		try {
+			createV1Schema(db);
+			db.run(
+				`INSERT INTO accounts (id, name, provider, api_key, refresh_token, created_at) VALUES ('legacy', 'Legacy', 'anthropic', 'key', 'refresh', 1)`,
+			);
+			runMigrations(db);
+			runMigrations(db);
+			expect(
+				getTableColumns(db, "accounts").filter(
+					(column) => column.name === "oauth_subject",
+				),
+			).toHaveLength(1);
+			expect(
+				db
+					.query("SELECT id, oauth_subject FROM accounts WHERE id = 'legacy'")
+					.get(),
+			).toEqual({ id: "legacy", oauth_subject: null });
+		} finally {
+			db.close();
+		}
+	});
+
 	it("reports existing indexes as skipped instead of claiming they were added", () => {
 		const db = new Database(":memory:");
 		try {
@@ -218,6 +242,7 @@ describe("database schema", () => {
 				"api_key",
 				"refresh_token",
 				"access_token",
+				"oauth_subject",
 				"expires_at",
 				"created_at",
 				"last_used",

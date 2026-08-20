@@ -28,6 +28,7 @@ const QUOTA_PROVIDERS = new Set<AccountProvider>([
 	"claude-code",
 	"codex",
 	"kimi",
+	"grok",
 ]);
 const QUOTA_SHUTDOWN_GRACE_MS = 2_000;
 
@@ -116,6 +117,20 @@ export function quotaIndicatesAvailability(
 ): boolean {
 	try {
 		if (report.state === "failed") return false;
+		if (provider === "grok") {
+			const credits = report.sources?.credits;
+			if (!credits || credits.state !== "ok") return false;
+			const raw =
+				typeof credits.data === "object" && credits.data !== null
+					? (credits.data as Record<string, unknown>)
+					: null;
+			return report.windows.some(
+				(window) =>
+					window.usedPercent < 100 &&
+					(window.id === "grok:included" ||
+						(window.id === "grok:on-demand" && raw?.onDemandEnabled === true)),
+			);
+		}
 		const usage = report.sources?.usage;
 		if (!usage || usage.state !== "ok") return false;
 		const data = usage.data;

@@ -213,6 +213,7 @@
         "@ccflare/logger": "workspace:*",
         "@ccflare/providers": "workspace:*",
         "@ccflare/proxy": "workspace:*",
+        "@ccflare/types": "workspace:*",
         "@ccflare/web": "workspace:*",
       },
     },

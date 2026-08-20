@@ -73,13 +73,18 @@ curl http://localhost:8080/health
 
 ### Provider Proxy
 
-#### /v1/{provider}/* (All Methods)
+#### /v1/{provider}/*
 
 Proxy requests to upstream provider APIs. The `/v1/{provider}` prefix is stripped exactly once before forwarding upstream. Requests are routed using the configured load balancing strategy across accounts matching the target provider.
 
 **Supported Providers:**
 - `/v1/anthropic/*` → `https://api.anthropic.com/*`
 - `/v1/openai/*` → `https://api.openai.com/v1/*`
+- `/v1/kimi/*` → `https://api.kimi.com/coding/v1/*`
+- `POST /v1/grok/responses` → `https://cli-chat-proxy.grok.com/v1/responses`
+
+Grok accepts only `POST /v1/grok/responses`; other Grok paths and methods are
+rejected locally.
 
 **Headers:**
 - All standard provider API headers are supported
@@ -230,6 +235,7 @@ Supported providers:
 - `claude-code` — collects Anthropic OAuth usage and profile data
 - `codex` — collects ChatGPT usage, account-check, and reset-credit data
 - `kimi` — collects Kimi Coding usage limits
+- `grok` — collects Grok Build included and enabled on-demand credit usage
 
 The large Codex profile-history probe is intentionally omitted because it does
 not provide current quota windows.
@@ -335,6 +341,9 @@ Supported providers:
 - `codex` — queries `GET https://chatgpt.com/backend-api/codex/models?client_version=<version>`
   once per known Codex CLI version (currently `0.145.0` and `0.144.1`),
   mirroring how the real Codex CLI discovers its catalog
+- `grok` — queries the account base URL's authoritative `GET /models` catalog
+  with the verified OAuth subject and official Grok Build client headers; an
+  upstream failure returns no hardcoded catalog entries
 
 All other providers return `501` with an explicit not-implemented message.
 
@@ -424,7 +433,7 @@ curl http://localhost:8080/api/accounts/uuid-here/models
 
 ### Auth Flow
 
-OAuth and auth endpoints are provider-scoped. The `{provider}` path segment determines which provider's OAuth flow is used (e.g., `anthropic`, `openai`, `claude-code`, `codex`).
+OAuth and auth endpoints are provider-scoped. The `{provider}` path segment determines which provider's OAuth flow is used (for example `claude-code`, `codex`, `kimi`, or `grok`).
 
 #### POST /api/auth/{provider}/init
 
@@ -499,6 +508,11 @@ curl http://localhost:8080/api/auth/session/uuid-here/status
 #### GET /oauth/{provider}/callback
 
 Browser redirect target for the OAuth flow. This is the callback URL that the OAuth provider redirects to after the user authorizes. Not called directly by API consumers.
+
+Codex and Grok normally use a loopback listener owned by `oauth-flow`, allowing
+the stored session to complete automatically while dashboard clients continue
+polling status. Grok's redirect is `http://127.0.0.1:1456/callback`; it validates
+state plus the signed OIDC ID token and returns a small success or failure page.
 
 ---
 

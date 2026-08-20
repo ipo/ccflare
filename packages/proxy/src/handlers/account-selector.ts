@@ -66,7 +66,9 @@ export function getAccountAvailability(
 	}
 
 	const now = Date.now();
-	const activeAccounts = configuredAccounts.filter((account) => !account.paused);
+	const activeAccounts = configuredAccounts.filter(
+		(account) => !account.paused,
+	);
 	const cooldowns = activeAccounts
 		.map((account) => account.rate_limited_until)
 		.filter((retryAt): retryAt is number => retryAt !== null && retryAt > now);

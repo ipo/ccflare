@@ -1,12 +1,12 @@
 export {
+	type AccountAvailability,
 	getAccountAvailability,
 	selectAccountsForRequest,
-	type AccountAvailability,
 } from "./account-selector";
 export {
+	type ProxyAttemptOutcome,
 	proxyUnauthenticated,
 	proxyWithAccount,
-	type ProxyAttemptOutcome,
 } from "./proxy-operations";
 export {
 	ERROR_MESSAGES,

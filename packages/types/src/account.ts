@@ -24,6 +24,7 @@ export interface Account {
 	api_key: string | null;
 	refresh_token: string | null;
 	access_token: string | null;
+	oauth_subject?: string | null;
 	expires_at: number | null;
 	request_count: number;
 	total_requests: number;

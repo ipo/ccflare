@@ -23,6 +23,7 @@ function getProviderVariant(
 			return "success";
 		case "claude-code":
 		case "codex":
+		case "grok":
 			return "outline";
 		default:
 			return "outline";

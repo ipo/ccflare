@@ -421,6 +421,15 @@ export async function handleCompatibilityProxy(
 			"Kimi models are not supported on compatibility routes; use POST /v1/kimi/chat/completions",
 		);
 	}
+	if (
+		typeof requestBodyJson.model === "string" &&
+		requestBodyJson.model.trim().startsWith("grok/")
+	) {
+		return buildCompatibilityError(
+			400,
+			"Grok models are not supported on compatibility routes; use POST /v1/grok/responses",
+		);
+	}
 
 	const requestMeta = createRequestMetadata(req, url);
 	requestEvents.emit("event", {

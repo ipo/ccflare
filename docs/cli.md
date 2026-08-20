@@ -87,7 +87,7 @@ Options:
   --logs [N]           Stream latest N lines then follow
   --stats              Show statistics (JSON output)
   --add-account <name> Add a new account
-    --provider <anthropic|openai|claude-code|codex>  Account provider (required)
+    --provider <anthropic|openai|claude-code|codex|kimi|grok>  Account provider (required)
   --list               List all accounts
   --remove <name>      Remove an account
   --pause <name>       Pause an account
@@ -111,7 +111,7 @@ Add a new account to the load balancer pool.
 
 **Syntax:**
 ```bash
-ccflare --add-account <name> --provider <anthropic|openai|claude-code|codex>
+ccflare --add-account <name> --provider <anthropic|openai|claude-code|codex|kimi|grok>
 ```
 
 **Options:**

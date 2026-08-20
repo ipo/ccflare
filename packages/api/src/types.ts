@@ -20,6 +20,7 @@ export interface AccountResponse {
 	provider: AccountProvider;
 	auth_method: AuthMethod;
 	base_url: string | null;
+	oauthSubject: string | null;
 	requestCount: number;
 	totalRequests: number;
 	lastUsed: string | null;

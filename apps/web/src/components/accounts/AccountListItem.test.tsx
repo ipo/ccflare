@@ -10,6 +10,7 @@ function account(isLimited: boolean): AccountResponse {
 		provider: "codex",
 		auth_method: "oauth",
 		base_url: null,
+		oauthSubject: null,
 		requestCount: 12,
 		totalRequests: 20,
 		lastUsed: null,

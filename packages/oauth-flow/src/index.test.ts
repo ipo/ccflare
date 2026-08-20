@@ -4,7 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Config } from "@ccflare/config";
 import { DatabaseFactory } from "@ccflare/database";
-import { createOAuthFlow } from "./index";
+import {
+	GROK_OAUTH_CLIENT_ID,
+	GROK_OAUTH_REDIRECT_URI,
+} from "@ccflare/providers";
+import { createOAuthFlow, stopAllOAuthLoopbackServers } from "./index";
 
 const tempDirs: string[] = [];
 const originalFetch = globalThis.fetch;
@@ -22,6 +26,7 @@ function createTestContext() {
 }
 
 afterEach(() => {
+	stopAllOAuthLoopbackServers();
 	globalThis.fetch = originalFetch;
 	DatabaseFactory.reset();
 
@@ -31,6 +36,113 @@ afterEach(() => {
 });
 
 describe("OAuthFlow", () => {
+	it("rejects a Grok loopback callback whose state does not match", async () => {
+		const { config, dbOps } = createTestContext();
+		globalThis.fetch = Object.assign(
+			async () =>
+				Response.json({
+					issuer: "https://auth.x.ai",
+					authorization_endpoint: "https://auth.x.ai/authorize",
+					token_endpoint: "https://auth.x.ai/token",
+					jwks_uri: "https://auth.x.ai/jwks",
+				}),
+			{ preconnect: originalFetch.preconnect },
+		) as typeof fetch;
+		const flow = await (await createOAuthFlow(dbOps, config)).begin({
+			name: "grok-state-mismatch",
+			provider: "grok",
+		});
+		const response = await originalFetch(
+			`${GROK_OAUTH_REDIRECT_URI}?code=bad&state=wrong`,
+		);
+		expect(response.status).toBe(400);
+		expect(await response.text()).toContain("state mismatch");
+		await expect(flow.completion).rejects.toThrow("state mismatch");
+		expect(dbOps.getAuthSession(flow.sessionId)).toBeNull();
+	});
+
+	it("auto-completes Grok loopback login only after state and signed ID-token validation", async () => {
+		const { config, dbOps } = createTestContext();
+		const keys = await crypto.subtle.generateKey(
+			{
+				name: "RSASSA-PKCS1-v1_5",
+				modulusLength: 2048,
+				publicExponent: new Uint8Array([1, 0, 1]),
+				hash: "SHA-256",
+			},
+			true,
+			["sign", "verify"],
+		);
+		const jwk = {
+			...(await crypto.subtle.exportKey("jwk", keys.publicKey)),
+			kid: "flow-key",
+		};
+		let expectedNonce = "";
+		globalThis.fetch = Object.assign(
+			async (input: RequestInfo | URL, init?: RequestInit) => {
+				const url = String(input);
+				if (url.startsWith(GROK_OAUTH_REDIRECT_URI)) {
+					return originalFetch(input, init);
+				}
+				if (url.endsWith("openid-configuration")) {
+					return Response.json({
+						issuer: "https://auth.x.ai",
+						authorization_endpoint: "https://auth.x.ai/authorize",
+						token_endpoint: "https://auth.x.ai/token",
+						jwks_uri: "https://auth.x.ai/jwks",
+						id_token_signing_alg_values_supported: ["RS256"],
+					});
+				}
+				if (url.endsWith("/jwks")) return Response.json({ keys: [jwk] });
+				const encode = (value: unknown) =>
+					Buffer.from(JSON.stringify(value)).toString("base64url");
+				const header = encode({ alg: "RS256", kid: "flow-key" });
+				const payload = encode({
+					iss: "https://auth.x.ai",
+					aud: GROK_OAUTH_CLIENT_ID,
+					exp: Math.floor(Date.now() / 1000) + 300,
+					nonce: expectedNonce,
+					sub: "persisted-grok-subject",
+				});
+				const signature = Buffer.from(
+					await crypto.subtle.sign(
+						"RSASSA-PKCS1-v1_5",
+						keys.privateKey,
+						new TextEncoder().encode(`${header}.${payload}`),
+					),
+				).toString("base64url");
+				return Response.json({
+					access_token: "grok-flow-access",
+					refresh_token: "grok-flow-refresh",
+					expires_in: 3600,
+					id_token: `${header}.${payload}.${signature}`,
+				});
+			},
+			{ preconnect: originalFetch.preconnect },
+		) as typeof fetch;
+
+		const flow = await (await createOAuthFlow(dbOps, config)).begin({
+			name: "grok-loopback-account",
+			provider: "grok",
+		});
+		const authUrl = new URL(flow.authUrl);
+		expectedNonce = authUrl.searchParams.get("nonce") ?? "";
+		expect(expectedNonce).not.toBe("");
+		const state = authUrl.searchParams.get("state");
+		expect(state).not.toBe(flow.pkce.verifier);
+		const callback = await originalFetch(
+			`${GROK_OAUTH_REDIRECT_URI}?code=grok-code&state=${state}`,
+		);
+		expect(callback.status).toBe(200);
+		await flow.completion;
+		expect(dbOps.getAccountByName("grok-loopback-account")).toMatchObject({
+			provider: "grok",
+			access_token: "grok-flow-access",
+			refresh_token: "grok-flow-refresh",
+			oauth_subject: "persisted-grok-subject",
+		});
+	});
+
 	it("stores the auth flow in auth_sessions with generic state_json", async () => {
 		const { config, dbOps } = createTestContext();
 		const oauthFlow = await createOAuthFlow(dbOps, config);
@@ -120,7 +232,7 @@ describe("OAuthFlow", () => {
 		);
 	});
 
-	it("completes a Codex OAuth flow and stores OAuth tokens on the account", async () => {
+	it("completes Codex directly, stops its listener, and immediately binds the next login", async () => {
 		const { config, dbOps } = createTestContext();
 		const oauthFlow = await createOAuthFlow(dbOps, config);
 		const flowResult = await oauthFlow.begin({
@@ -157,6 +269,13 @@ describe("OAuthFlow", () => {
 			sessionId: flowResult.sessionId,
 			code: "codex-auth-code",
 		});
+		expect(await flowResult.completion).toEqual(createdAccount);
+
+		const nextFlow = await oauthFlow.begin({
+			name: "codex-next-account",
+			provider: "codex",
+		});
+		expect(nextFlow.completion).toBeInstanceOf(Promise);
 
 		expect(createdAccount).toEqual({
 			id: expect.any(String),

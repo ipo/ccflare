@@ -9,6 +9,7 @@ export interface AccountRow {
 	api_key: string | null;
 	refresh_token: string | null;
 	access_token: string | null;
+	oauth_subject?: string | null;
 	expires_at: number | null;
 	created_at: number;
 	last_used: number | null;
@@ -34,6 +35,7 @@ export function toAccount(row: AccountRow): Account {
 		api_key: row.api_key,
 		refresh_token: row.refresh_token,
 		access_token: row.access_token,
+		oauth_subject: row.oauth_subject ?? null,
 		expires_at: row.expires_at,
 		created_at: row.created_at,
 		last_used: row.last_used,

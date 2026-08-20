@@ -213,7 +213,7 @@ We use Biome for both linting and formatting to maintain consistent code quality
    interface Account {
      id: string;
      name: string;
-     provider: "anthropic" | "openai" | "claude-code" | "codex";
+     provider: "anthropic" | "openai" | "claude-code" | "codex" | "kimi" | "grok";
    }
    
    function getAccount(id: string): Account | null {
@@ -686,7 +686,7 @@ The CLI functionality is integrated into the TUI application. Use `ccflare` with
 # or build and run with: bun run ccflare
 
 # Add a new account
-ccflare --add-account <name> --provider <anthropic|openai|claude-code|codex>
+ccflare --add-account <name> --provider <anthropic|openai|claude-code|codex|kimi|grok>
 
 # List all accounts
 ccflare --list

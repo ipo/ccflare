@@ -10,6 +10,7 @@ export interface CreateAccountData {
 	api_key?: string | null;
 	refresh_token?: string | null;
 	access_token?: string | null;
+	oauth_subject?: string | null;
 	expires_at?: number | null;
 	weight?: number;
 }
@@ -20,7 +21,7 @@ export interface UpdateAccountData {
 }
 
 const accountSelectFields = `
-	id, name, provider, auth_method, base_url, api_key, refresh_token, access_token,
+		id, name, provider, auth_method, base_url, api_key, refresh_token, access_token, oauth_subject,
 	expires_at, created_at, last_used, request_count, total_requests,
 	rate_limited_until, session_start, session_request_count,
 	COALESCE(weight, 1) as weight,
@@ -45,8 +46,8 @@ export class AccountRepository extends BaseRepository<Account> {
 			`
 			INSERT INTO accounts (
 				id, name, provider, auth_method, base_url, api_key, refresh_token,
-				access_token, expires_at, created_at, request_count, total_requests, weight
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?)
+					access_token, oauth_subject, expires_at, created_at, request_count, total_requests, weight
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?)
 		`,
 			[
 				id,
@@ -57,6 +58,7 @@ export class AccountRepository extends BaseRepository<Account> {
 				data.api_key ?? null,
 				data.refresh_token ?? null,
 				data.access_token ?? null,
+				data.oauth_subject ?? null,
 				data.expires_at ?? null,
 				createdAt,
 				data.weight ?? 1,
@@ -101,6 +103,7 @@ export class AccountRepository extends BaseRepository<Account> {
 		accessToken: string;
 		refreshToken?: string | null;
 		expiresAt?: number | null;
+		oauthSubject?: string | null;
 		baseUrl?: string | null;
 		weight?: number;
 	}): Account {
@@ -115,6 +118,7 @@ export class AccountRepository extends BaseRepository<Account> {
 			access_token: opts.accessToken,
 			refresh_token: opts.refreshToken,
 			expires_at: opts.expiresAt,
+			oauth_subject: opts.oauthSubject,
 			base_url: opts.baseUrl,
 			weight: opts.weight,
 		});

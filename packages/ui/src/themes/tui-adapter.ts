@@ -24,6 +24,7 @@ export interface TuiColorMap {
 	openai: string;
 	claudeCode: string;
 	codex: string;
+	grok: string;
 }
 
 export function themeToTuiColors(theme: ThemePalette): TuiColorMap {
@@ -52,5 +53,6 @@ export function themeToTuiColors(theme: ThemePalette): TuiColorMap {
 		openai: "#74aa9c",
 		claudeCode: theme.primary,
 		codex: theme.info,
+		grok: theme.warning,
 	};
 }

@@ -13,6 +13,7 @@ import {
 	createOAuthFlow,
 	isOAuthFlowProvider,
 	type OAuthFlowProvider,
+	stopAllOAuthLoopbackServers,
 } from "@ccflare/oauth-flow";
 
 import {
@@ -25,31 +26,6 @@ import {
 import { parseJsonObject } from "../utils/json";
 
 const log = new Logger("OAuthHandler");
-const CALLBACK_FORWARDER_TIMEOUT_MS = 5 * 60 * 1000;
-
-const CALLBACK_FORWARDER_CONFIG: Partial<
-	Record<
-		OAuthFlowProvider,
-		{
-			port: number;
-			targetPath: string;
-		}
-	>
-> = {
-	codex: {
-		port: 1455,
-		targetPath: "/oauth/codex/callback",
-	},
-};
-
-type CallbackForwarder = {
-	provider: OAuthFlowProvider;
-	server: ReturnType<typeof Bun.serve>;
-	timeout: ReturnType<typeof setTimeout>;
-};
-
-const callbackForwarders = new Map<number, CallbackForwarder>();
-
 function resolveAuthProvider(provider: string): OAuthFlowProvider | Response {
 	if (!isAccountProvider(provider)) {
 		return errorResponse(NotFound(`Unknown provider '${provider}'`));
@@ -111,71 +87,8 @@ function parseSessionStatus(stateJson: string): "pending" | "completed" {
 	}
 }
 
-function stopCallbackForwarder(port: number): void {
-	const forwarder = callbackForwarders.get(port);
-	if (!forwarder) {
-		return;
-	}
-
-	clearTimeout(forwarder.timeout);
-	forwarder.server.stop(true);
-	callbackForwarders.delete(port);
-}
-
 export function stopAllOAuthCallbackForwarders(): void {
-	for (const port of [...callbackForwarders.keys()]) {
-		stopCallbackForwarder(port);
-	}
-}
-
-function startCallbackForwarder(provider: OAuthFlowProvider): void {
-	const config = CALLBACK_FORWARDER_CONFIG[provider];
-	if (!config) {
-		return;
-	}
-
-	const { port, targetPath } = config;
-	stopCallbackForwarder(port);
-
-	const timeout = setTimeout(() => {
-		stopCallbackForwarder(port);
-	}, CALLBACK_FORWARDER_TIMEOUT_MS);
-	timeout.unref?.();
-
-	try {
-		const server = Bun.serve({
-			port,
-			fetch(request) {
-				const url = new URL(request.url);
-				if (request.method !== "GET" || url.pathname !== "/auth/callback") {
-					return new Response("Not Found", { status: 404 });
-				}
-
-				const target = new URL(`http://localhost:8080${targetPath}`);
-				target.search = url.search;
-				setTimeout(() => {
-					stopCallbackForwarder(port);
-				}, 0);
-
-				return new Response(null, {
-					status: 302,
-					headers: {
-						Location: target.toString(),
-						"Cache-Control": "no-store",
-					},
-				});
-			},
-		});
-
-		callbackForwarders.set(port, {
-			provider,
-			server,
-			timeout,
-		});
-	} catch (error) {
-		clearTimeout(timeout);
-		throw error;
-	}
+	stopAllOAuthLoopbackServers();
 }
 
 /**
@@ -210,13 +123,6 @@ export function createAuthInitHandler(dbOps: DatabaseOperations) {
 					name,
 					provider: validatedProvider,
 				});
-
-				try {
-					startCallbackForwarder(validatedProvider);
-				} catch (error) {
-					dbOps.deleteAuthSession(flowResult.sessionId);
-					throw error;
-				}
 
 				const result: MutationResult<AuthInitData> = {
 					success: true,

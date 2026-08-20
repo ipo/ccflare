@@ -17,6 +17,7 @@ export {
 	CodexOAuthProvider,
 	CodexProvider,
 } from "./codex/index";
+export * from "./grok/index";
 export {
 	KIMI_DEVICE_GRANT_TYPE,
 	KIMI_OAUTH_CLIENT_ID,

@@ -109,7 +109,7 @@ export async function submitAddAccount(
 	}
 
 	const deviceGrant = isDeviceCodeProvider(provider);
-	if (!flowData || (!code && !deviceGrant)) {
+	if (!flowData || (!code && !deviceGrant && !flowData.completion)) {
 		throw new Error("Authorization code is required for OAuth providers.");
 	}
 
@@ -117,14 +117,16 @@ export async function submitAddAccount(
 	const oauthFlow = await createOAuthFlow(dbOps, config);
 
 	console.log(
-		deviceGrant
+		deviceGrant || flowData.completion
 			? "\nWaiting for you to approve in the browser..."
 			: "\nExchanging code for tokens...",
 	);
-	await oauthFlow.complete(
-		{ sessionId: flowData.sessionId, code: code ?? "", name },
-		flowData,
-	);
+	if (flowData.completion) await flowData.completion;
+	else
+		await oauthFlow.complete(
+			{ sessionId: flowData.sessionId, code: code ?? "", name },
+			flowData,
+		);
 
 	console.log(`\nAccount '${name}' added successfully!`);
 	console.log(`Provider: ${getProviderDisplayLabel(provider)}`);

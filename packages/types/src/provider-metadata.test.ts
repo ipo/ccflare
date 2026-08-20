@@ -20,9 +20,10 @@ describe("provider metadata", () => {
 			"claude-code",
 			"codex",
 			"kimi",
+			"grok",
 		]);
 		expect(API_KEY_PROVIDERS).toEqual(["anthropic", "openai"]);
-		expect(OAUTH_PROVIDERS).toEqual(["claude-code", "codex", "kimi"]);
+		expect(OAUTH_PROVIDERS).toEqual(["claude-code", "codex", "kimi", "grok"]);
 		expect(isApiKeyProvider("anthropic")).toBe(true);
 		expect(isApiKeyProvider("claude-code")).toBe(false);
 		expect(isOAuthProvider("codex")).toBe(true);
@@ -36,6 +37,7 @@ describe("provider metadata", () => {
 			{ value: "claude-code", label: "Claude Code" },
 			{ value: "codex", label: "Codex" },
 			{ value: "kimi", label: "Kimi Code" },
+			{ value: "grok", label: "Grok" },
 		]);
 		expect(getProviderDisplayLabel("claude-code")).toBe("Claude Code");
 		expect(getProviderMetadata("anthropic")).toMatchObject({
@@ -55,6 +57,13 @@ describe("provider metadata", () => {
 			supportsWebSocket: true,
 			defaultBaseUrl: "https://chatgpt.com/backend-api/codex",
 			specialRequirements: ["Requires Codex OAuth authentication"],
+		});
+		expect(getProviderMetadata("grok")).toMatchObject({
+			canonicalName: "grok",
+			displayLabel: "Grok",
+			authMethod: "oauth",
+			supportsWebSocket: false,
+			defaultBaseUrl: "https://cli-chat-proxy.grok.com/v1",
 		});
 	});
 

@@ -125,6 +125,18 @@ export async function handleProxy(
 	if (!requestContext) {
 		return new Response("Not Found", { status: 404 });
 	}
+	if (
+		requestContext.providerName === "grok" &&
+		requestContext.upstreamPath !== "/responses"
+	) {
+		return new Response("Not Found", { status: 404 });
+	}
+	if (requestContext.providerName === "grok" && req.method !== "POST") {
+		return new Response("Method Not Allowed", {
+			status: 405,
+			headers: { allow: "POST" },
+		});
+	}
 
 	// 1. Create request metadata before any buffering work so total timing
 	// includes proxy-side request preparation overhead.

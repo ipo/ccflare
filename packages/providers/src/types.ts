@@ -187,6 +187,11 @@ export interface OAuthProviderConfig {
 	redirectUri: string;
 }
 
+export interface OAuthExchangeContext {
+	state?: string;
+	nonce?: string;
+}
+
 /**
  * Result of an OAuth device authorization request (RFC 8628).
  * `deviceCode` is the polling credential; the user approves at
@@ -205,10 +210,12 @@ export interface DeviceAuthorization {
 
 export interface OAuthProvider {
 	getOAuthConfig(): OAuthProviderConfig;
+	discoverConfig?(): Promise<OAuthProviderConfig>;
 	exchangeCode(
 		code: string,
 		verifier: string,
 		config: OAuthProviderConfig,
+		context?: OAuthExchangeContext,
 	): Promise<TokenResult>;
 	generateAuthUrl(config: OAuthProviderConfig, pkce: PKCEChallenge): string;
 	/**
@@ -224,10 +231,13 @@ export interface OAuthProvider {
 export interface PKCEChallenge {
 	verifier: string;
 	challenge: string;
+	state?: string;
+	nonce?: string;
 }
 
 export interface TokenResult {
 	refreshToken: string;
 	accessToken: string;
 	expiresAt: number;
+	oauthSubject?: string;
 }

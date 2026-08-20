@@ -550,6 +550,15 @@ describe("APIRouter", () => {
 				error: expect.stringContaining("oauth"),
 			}),
 		);
+
+		const grokApiKey = await apiRequest(router, "POST", "/api/accounts", {
+			name: "grok-api-key",
+			provider: "grok",
+			auth_method: "api_key",
+			api_key: "xai-key",
+		});
+		expect(grokApiKey.status).toBe(400);
+		expect(await grokApiKey.text()).toContain("oauth");
 	});
 
 	it("lists provider, auth_method, and base_url for created accounts", async () => {
@@ -573,6 +582,7 @@ describe("APIRouter", () => {
 			provider: string;
 			auth_method: string;
 			base_url: string | null;
+			oauthSubject: string | null;
 		}>;
 		expect(accounts).toEqual(
 			expect.arrayContaining([
@@ -629,6 +639,7 @@ describe("APIRouter", () => {
 			provider: string;
 			auth_method: string;
 			base_url: string | null;
+			oauthSubject: string | null;
 			requestCount: number;
 			totalRequests: number;
 			lastUsed: string | null;
@@ -658,6 +669,7 @@ describe("APIRouter", () => {
 				provider: "anthropic",
 				auth_method: "api_key",
 				base_url: null,
+				oauthSubject: null,
 				requestCount: 0,
 				totalRequests: 0,
 				lastUsed: null,
@@ -1295,6 +1307,102 @@ describe("APIRouter", () => {
 		expect(serialized).not.toContain("fresh-kimi-access-token");
 		expect(serialized).not.toContain("fresh-kimi-refresh-token");
 		expect(serialized).not.toContain("upstream-secret");
+	});
+
+	it("fetches Grok quota and models with the verified subject through management routes", async () => {
+		const { router, dbOps } = createRouterContext();
+		const account = dbOps.createOAuthAccount({
+			name: "grok-control-plane-owner",
+			provider: "grok",
+			accessToken: "grok-control-access",
+			refreshToken: "grok-control-refresh",
+			expiresAt: Date.now() + 60_000,
+			oauthSubject: "verified-grok-user",
+		});
+		dbOps.markAccountRateLimited(account.id, Date.now() + 300_000);
+		const requestedUrls: string[] = [];
+
+		installFetchMock((request) => {
+			requestedUrls.push(request.url);
+			expect(request.headers.get("authorization")).toBe(
+				"Bearer grok-control-access",
+			);
+			expect(request.headers.get("x-userid")).toBe("verified-grok-user");
+			expect(request.headers.get("x-xai-token-auth")).toBe("xai-grok-cli");
+			expect(request.headers.get("x-grok-client-version")).toBe("1.0.6");
+			if (request.url.endsWith("/billing?format=credits")) {
+				return Response.json({
+					config: {
+						creditUsagePercent: 25,
+						currentPeriod: {
+							type: "USAGE_PERIOD_TYPE_WEEKLY",
+							end: "2026-08-27T00:00:00Z",
+						},
+					},
+					onDemandEnabled: false,
+				});
+			}
+			if (request.url.endsWith("/models")) {
+				return Response.json({
+					data: [
+						{
+							model: "grok-live-control-plane",
+							name: "Grok Live Control Plane",
+							reasoning_effort: "high",
+							reasoning_efforts: [{ value: "high" }],
+						},
+					],
+				});
+			}
+			return Response.json({ error: "unexpected URL" }, { status: 500 });
+		});
+
+		const quotaResponse = await apiRequest(
+			router,
+			"GET",
+			`/api/accounts/${account.id}/quota`,
+		);
+		expect(quotaResponse.status).toBe(200);
+		expect(await quotaResponse.json()).toEqual(
+			expect.objectContaining({
+				account: expect.objectContaining({ provider: "grok" }),
+				state: "ok",
+				windows: [
+					expect.objectContaining({
+						id: "grok:included",
+						usedPercent: 25,
+					}),
+				],
+			}),
+		);
+		expect(dbOps.getAccount(account.id)?.rate_limited_until).toBeNull();
+
+		const modelsResponse = await apiRequest(
+			router,
+			"GET",
+			`/api/accounts/${account.id}/models`,
+		);
+		expect(modelsResponse.status).toBe(200);
+		expect(await modelsResponse.json()).toEqual(
+			expect.objectContaining({
+				account: expect.objectContaining({ provider: "grok" }),
+				state: "ok",
+				versions: [
+					expect.objectContaining({
+						clientVersion: "1.0.6",
+						models: [
+							expect.objectContaining({
+								slug: "grok-live-control-plane",
+							}),
+						],
+					}),
+				],
+			}),
+		);
+		expect(requestedUrls).toEqual([
+			"https://cli-chat-proxy.grok.com/v1/billing?format=credits",
+			"https://cli-chat-proxy.grok.com/v1/models",
+		]);
 	});
 
 	it("returns explicit account quota errors for missing and unsupported accounts", async () => {
@@ -2351,8 +2459,21 @@ describe("APIRouter", () => {
 		expect([400, 404]).toContain(unknownProvider.status);
 	});
 
-	it("starts localhost OAuth callback forwarders for providers that need them", async () => {
-		const { router } = createRouterContext();
+	it("auto-completes Codex through the shared localhost OAuth loopback", async () => {
+		const { router, dbOps } = createRouterContext();
+		globalThis.fetch = Object.assign(
+			async (input: RequestInfo | URL, init?: RequestInit) => {
+				if (String(input).startsWith("http://127.0.0.1:1455/")) {
+					return originalFetch(input, init);
+				}
+				return Response.json({
+					access_token: "codex-loopback-access",
+					refresh_token: "codex-loopback-refresh",
+					expires_in: 3600,
+				});
+			},
+			{ preconnect: originalFetch.preconnect },
+		) as typeof fetch;
 
 		const codexInitResponse = await apiRequest(
 			router,
@@ -2378,10 +2499,11 @@ describe("APIRouter", () => {
 				redirect: "manual",
 			},
 		);
-		expect(codexForwardResponse.status).toBe(302);
-		expect(codexForwardResponse.headers.get("location")).toBe(
-			`http://localhost:8080/oauth/codex/callback?code=codex-code&state=${codexState}&foo=bar`,
-		);
+		expect(codexForwardResponse.status).toBe(200);
+		expect(await codexForwardResponse.text()).toContain("Account connected");
+		expect(dbOps.getAccountByName("codex-forwarder-account")).toMatchObject({
+			access_token: "codex-loopback-access",
+		});
 	});
 
 	it("auto-completes OAuth callbacks via state lookup and reports completed session status", async () => {

@@ -32,6 +32,7 @@ erDiagram
         TEXT api_key
         TEXT refresh_token
         TEXT access_token
+        TEXT oauth_subject
         INTEGER expires_at
         INTEGER created_at
         INTEGER last_used
@@ -131,13 +132,14 @@ Stores configured provider accounts plus live runtime state.
 
 Important fields:
 
-- `provider`: provider key such as `anthropic`, `openai`, `claude-code`, `codex`
+- `provider`: provider key such as `anthropic`, `openai`, `claude-code`, `codex`, `kimi`, or `grok`
 - `auth_method`: `api_key` or `oauth`
 - `weight`: selection weight used by the strategy layer
 - `paused`: explicit operator-controlled pause flag
 - `rate_limited_until`, `rate_limit_reset`, `rate_limit_status`, `rate_limit_remaining`: rate-limit metadata
 - `session_start`, `session_request_count`: session-strategy bookkeeping
 - `refresh_token`, `access_token`, `expires_at`: OAuth token lifecycle state
+- `oauth_subject`: verified nullable OIDC subject used by providers such as Grok
 
 ### `requests`
 

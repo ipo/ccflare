@@ -13,7 +13,7 @@ ccflare routes each provider by URL prefix, load-balances across multiple accoun
 - **Compatibility routes** — route by `/v1/ccflare/*` with family-prefixed models
 - **Account failover** — retry another account when one provider account is rate limited
 - **Built-in observability** — dashboard, request history, analytics, logs, and health endpoints
-- **Flexible auth** — API key and OAuth account support
+- **Flexible auth** — API key and OAuth account support, including Grok Build browser login
 
 ## Quick start
 
@@ -42,6 +42,7 @@ ccflare proxies requests by provider prefix:
 - `http://localhost:8080/v1/anthropic/*`
 - `http://localhost:8080/v1/openai/*`
 - `http://localhost:8080/v1/kimi/*`
+- `POST http://localhost:8080/v1/grok/responses`
 - `http://localhost:8080/v1/ccflare/*`
 
 Examples:
@@ -50,6 +51,7 @@ Examples:
 - `/v1/openai/chat/completions` → `https://api.openai.com/v1/chat/completions`
 - `/v1/openai/responses` → `https://api.openai.com/v1/responses`
 - `/v1/kimi/chat/completions` → `https://api.kimi.com/coding/v1/chat/completions`
+- `/v1/grok/responses` → `https://cli-chat-proxy.grok.com/v1/responses`
 
 The `/v1/{provider}` prefix is stripped exactly once before forwarding upstream.
 
@@ -61,8 +63,8 @@ the `model` prefix:
 
 An unprefixed model uses the route's native family (`openai` on OpenAI
 compatibility routes and `anthropic` on Anthropic compatibility routes).
-Kimi models are native-only and use `/v1/kimi/chat/completions`; compatibility
-routes reject `kimi/` model IDs with guidance to use that route.
+Kimi and Grok models are native-only. Grok uses `/v1/grok/responses`, and
+compatibility routes reject `kimi/` and `grok/` model IDs with native-route guidance.
 
 Examples:
 
@@ -106,6 +108,9 @@ bun run ccflare --add-account work --provider claude-code
 
 # Codex OAuth
 bun run ccflare --add-account codex --provider codex
+
+# Grok Build OAuth (the browser callback completes automatically)
+bun run ccflare --add-account grok-work --provider grok
 ```
 
 The management API also exposes provider-specific auth endpoints:
@@ -206,9 +211,9 @@ Key endpoints:
 
 - `GET /health` — status, account count, strategy, supported providers
 - `GET /api/accounts` — list accounts
-- `GET /api/accounts/:id/quota` — fetch and cache live quota for one Claude Code, Codex, or Kimi account
+- `GET /api/accounts/:id/quota` — fetch and cache live quota for one Claude Code, Codex, Kimi, or Grok account
 - `POST /api/accounts/:id/rate-limit/reset` — clear local rate-limit gating for one account
-- `GET /api/accounts/:id/models` — fetch the live model catalog for one Codex account, tiered by client version
+- `GET /api/accounts/:id/models` — fetch the live model catalog for one Codex or Grok account
 - `POST /api/accounts` — create an account
 - `PATCH /api/accounts/:id` — update an account (rename, change `base_url`)
 - `DELETE /api/accounts/:id` — remove an account

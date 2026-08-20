@@ -210,6 +210,13 @@ export function createAccountAddHandler(
 					),
 				);
 			}
+			if (provider === "grok") {
+				return errorResponse(
+					BadRequest(
+						"Grok accounts must be connected through POST /api/auth/grok/init",
+					),
+				);
+			}
 
 			const baseUrl = normalizeBaseUrl(body.base_url ?? body.baseUrl);
 

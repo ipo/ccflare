@@ -22,6 +22,7 @@ ccflare’s provider layer gives the rest of the system a consistent way to deal
 - `claude-code`
 - `codex`
 - `kimi`
+- `grok`
 
 These are exposed through `/v1/{provider}/...` routes.
 
@@ -35,16 +36,22 @@ graph TD
     P2[OpenAIProvider]
     P3[ClaudeCodeProvider]
     P4[CodexProvider]
+    P5[KimiProvider]
+    P6[GrokProvider]
 
     INDEX --> REGISTRY
     INDEX --> P1
     INDEX --> P2
     INDEX --> P3
     INDEX --> P4
+    INDEX --> P5
+    INDEX --> P6
     P1 --> REGISTRY
     P2 --> REGISTRY
     P3 --> REGISTRY
     P4 --> REGISTRY
+    P5 --> REGISTRY
+    P6 --> REGISTRY
 ```
 
 The registry is responsible for:
@@ -62,6 +69,7 @@ The runtime proxy receives paths like:
 - `/v1/openai/chat/completions`
 - `/v1/claude-code/...`
 - `/v1/codex/...`
+- `/v1/grok/responses`
 
 Flow:
 
@@ -84,6 +92,7 @@ These use `api_key` accounts and do not depend on refresh-token flows.
 - `claude-code`
 - `codex`
 - `kimi`
+- `grok`
 
 These use provider-specific OAuth adapters plus the shared OAuth flow package. Access tokens may be refreshed automatically during forwarding.
 
@@ -92,7 +101,7 @@ These use provider-specific OAuth adapters plus the shared OAuth flow package. A
 Provider metadata records an `oauthGrant` so onboarding code can branch without
 importing provider classes:
 
-- `authorization_code` (`claude-code`, `codex`) — the user opens a redirect URL
+- `authorization_code` (`claude-code`, `codex`, `grok`) — the user opens a redirect URL
   and an authorization code comes back.
 - `device_code` (`kimi`) — the user approves at a verification URL and there is
   **no code to paste**; ccflare polls the token endpoint instead.
@@ -169,6 +178,9 @@ Provider implementations own the remote protocol details:
   JWT in memory and never returns decoded claims.
 - Kimi queries `/usages`, which returns the weekly summary, per-window limits
   and the booster wallet in a single payload.
+- Grok queries `/billing?format=credits` with the verified OIDC subject. It
+  normalizes included credits and explicitly enabled on-demand headroom and
+  fails closed for missing, malformed, or exhausted quota data.
 
 The large Codex `/wham/profiles/me` history is intentionally not fetched. It is
 optional in the reference script and does not provide the current quota windows.
@@ -182,7 +194,7 @@ reaches the management response.
 
 `anthropic` and `openai` accounts currently return `501` because this endpoint
 only implements the OAuth subscription quota protocols used by Claude Code,
-Codex and Kimi.
+Codex, Kimi, and Grok.
 
 ## Account Model Catalog Fetching
 
@@ -191,7 +203,7 @@ implementation for its live model catalog using that account's OAuth
 credentials. This is also a control-plane operation and mirrors the quota
 endpoint's account lookup, token refresh, and error mapping.
 
-Only Codex is implemented. The Codex provider queries
+Codex and Grok are implemented. The Codex provider queries
 `GET <base>/models?client_version=<version>` once per known Codex CLI
 version (`0.145.0` and `0.144.1`), the same discovery endpoint the real
 Codex CLI uses. The response is tiered by client version, newest first:
@@ -200,6 +212,10 @@ tiers, so each older tier lists only the models or reasoning efforts that
 genuinely require that older client. Models known to exist but absent from
 the remote catalog (`codex-auto-review`) are appended to the newest
 successful tier with `"hidden": true`.
+
+Grok queries the authoritative `GET <base>/models` catalog once with the
+verified OIDC subject and Grok Build 1.0.6 client headers. It does not query
+`/models-v2` and returns no hardcoded entries when the live request fails.
 
 All other providers return `501` for now.
 
@@ -336,6 +352,20 @@ explicit. Cross-family collaboration messages remain plaintext.
   [Request Cost](#request-cost)
 - quota fetching probes `{baseUrl}/usages`, the same endpoint the kimi-cli
   usage view polls
+
+### Grok
+
+- OAuth-only native Responses provider at `/v1/grok/responses`
+- upstream base URL defaults to `https://cli-chat-proxy.grok.com/v1`
+- xAI authorization-code PKCE uses OIDC discovery and a loopback callback at
+  `http://127.0.0.1:1456/callback`; signed ID-token claims are verified before
+  the subject is stored
+- billing quota comes from `/billing?format=credits`; the authoritative live
+  catalog comes from `/models`, with no `/models-v2` or hardcoded fallback
+- Grok Build 1.0.6 embeds `grok-4.6` and `grok-4.5` with 500k context and the
+  Responses backend. 4.6 advertises xhigh/high/medium/low effort and 4.5
+  advertises high/medium/low. These entries are documentation, not fallback data.
+- compatibility transforms, API keys, Chat Completions, and WebSockets are not supported
 
 ## Adding a New Provider
 

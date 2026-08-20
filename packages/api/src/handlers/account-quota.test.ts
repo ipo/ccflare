@@ -102,6 +102,71 @@ describe("quotaIndicatesAvailability", () => {
 		).toBe(false);
 	});
 
+	test("grok: provider-normalized credit windows => available", () => {
+		const grokReport: ProviderQuotaReport = {
+			state: "ok",
+			collectedAt: new Date().toISOString(),
+			windows: [
+				{
+					id: "grok:included",
+					label: "Included credits",
+					period: "weekly",
+					scope: "account",
+					usedPercent: 20,
+				},
+			],
+			sources: {
+				credits: { state: "ok", status: 200, data: {} },
+			},
+		};
+		expect(quotaIndicatesAvailability("grok", grokReport)).toBe(true);
+		expect(
+			quotaIndicatesAvailability("grok", {
+				...grokReport,
+				windows: [{ ...grokReport.windows[0], usedPercent: 100 }],
+			}),
+		).toBe(false);
+		expect(
+			quotaIndicatesAvailability("grok", {
+				...grokReport,
+				windows: [
+					{ ...grokReport.windows[0], usedPercent: 100 },
+					{
+						...grokReport.windows[0],
+						id: "grok:on-demand",
+						usedPercent: 20,
+					},
+				],
+				sources: {
+					credits: {
+						state: "ok",
+						status: 200,
+						data: { onDemandEnabled: true },
+					},
+				},
+			}),
+		).toBe(true);
+		expect(
+			quotaIndicatesAvailability("grok", {
+				...grokReport,
+				windows: [
+					{
+						...grokReport.windows[0],
+						id: "grok:on-demand",
+						usedPercent: 20,
+					},
+				],
+			}),
+		).toBe(false);
+		expect(
+			quotaIndicatesAvailability("grok", {
+				...grokReport,
+				state: "failed",
+				windows: [],
+			}),
+		).toBe(false);
+	});
+
 	test("garbage / failed / unparsable payloads => false (fail-safe)", () => {
 		expect(quotaIndicatesAvailability("codex", report(null))).toBe(false);
 		expect(quotaIndicatesAvailability("codex", report({}, "failed"))).toBe(

@@ -53,6 +53,7 @@ const PROVIDER_PRICING_SOURCES: Readonly<
 	"claude-code": { catalogues: ["anthropic"] },
 	codex: { catalogues: ["openai"] },
 	kimi: { catalogues: ["moonshotai"], modelAliases: KIMI_MODEL_ALIASES },
+	grok: { catalogues: ["xai"] },
 };
 
 /** Where to price one model id, given the account provider that served it. */

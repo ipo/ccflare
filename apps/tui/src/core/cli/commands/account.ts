@@ -111,14 +111,13 @@ export async function addAccount(
 			console.log(`\nVerification code: ${userCode}`);
 		}
 		console.log("\nWaiting for you to approve in the browser...");
-	} else {
+	} else if (!flowResult.completion) {
 		code = await adapter.input("\nEnter the authorization code: ");
 		console.log("\nExchanging code for tokens...");
 	}
-	const _account = await oauthFlow.complete(
-		{ sessionId, code, name },
-		flowResult,
-	);
+	const _account = flowResult.completion
+		? await flowResult.completion
+		: await oauthFlow.complete({ sessionId, code, name }, flowResult);
 
 	console.log(`\nAccount '${name}' added successfully!`);
 	console.log(`Provider: ${getProviderDisplayLabel(provider)}`);

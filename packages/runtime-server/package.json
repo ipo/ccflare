@@ -18,6 +18,7 @@
 		"@ccflare/http": "workspace:*",
 		"@ccflare/logger": "workspace:*",
 		"@ccflare/providers": "workspace:*",
-		"@ccflare/proxy": "workspace:*"
+		"@ccflare/proxy": "workspace:*",
+		"@ccflare/types": "workspace:*"
 	}
 }

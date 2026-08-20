@@ -14,6 +14,7 @@ describe("toAccount", () => {
 			"claude-code",
 			"codex",
 			"kimi",
+			"grok",
 		]);
 	});
 

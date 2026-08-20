@@ -211,7 +211,7 @@ bun run apps/tui/src/main.ts --stats                  # Show statistics (JSON)
 bun run apps/tui/src/main.ts --help                   # Show help
 
 # Add account
-bun run apps/tui/src/main.ts --add-account <name> --provider <anthropic|openai|claude-code|codex>
+bun run apps/tui/src/main.ts --add-account <name> --provider <anthropic|openai|claude-code|codex|kimi|grok>
 ```
 
 For more detailed CLI documentation, see [CLI Commands](./cli.md).

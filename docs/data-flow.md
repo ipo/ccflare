@@ -206,7 +206,10 @@ sequenceDiagram
 Important note:
 
 - auth flow state is stored in `auth_sessions`
-- callback forwarding is provider-scoped and managed by `api`
+- loopback authorization-code callbacks (Codex and Grok) are owned by
+  `oauth-flow`; they validate state, complete the stored session, return a small
+  browser page, and stop after completion or a ten-minute timeout
+- Grok verifies the signed OIDC ID token before persisting its `sub`
 
 ## Database Writes During Normal Operation
 

@@ -69,6 +69,21 @@ afterEach(() => {
 });
 
 describe("handleCompatibilityProxy", () => {
+	it("rejects grok-prefixed models with native Responses guidance", async () => {
+		const response = await handleCompatibilityProxy(
+			new Request("http://localhost:8080/v1/ccflare/openai/responses", {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ model: "grok/grok-4.6", input: "hello" }),
+			}),
+			new URL("http://localhost:8080/v1/ccflare/openai/responses"),
+			createProxyContext({}),
+		);
+		if (!response) throw new Error("expected compatibility rejection");
+		expect(response.status).toBe(400);
+		expect(await response.text()).toContain("POST /v1/grok/responses");
+	});
+
 	it("uses the route-native family when the model is unprefixed", async () => {
 		const response = await handleCompatibilityProxy(
 			new Request("http://localhost:8080/v1/ccflare/openai/chat/completions", {

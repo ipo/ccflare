@@ -110,6 +110,7 @@ function shouldMigrateAccountsTable(columns: TableInfoRow[]): boolean {
 	const weight = getColumn(columns, "weight");
 	const authMethod = getColumn(columns, "auth_method");
 	const baseUrl = getColumn(columns, "base_url");
+	const oauthSubject = getColumn(columns, "oauth_subject");
 
 	return (
 		!provider ||
@@ -123,6 +124,7 @@ function shouldMigrateAccountsTable(columns: TableInfoRow[]): boolean {
 		!authMethod ||
 		authMethod.notnull !== 1 ||
 		!baseUrl ||
+		!oauthSubject ||
 		hasColumn(columns, "account_tier")
 	);
 }
@@ -382,7 +384,8 @@ function migrateAccountsTable(
 			base_url TEXT,
 			api_key TEXT,
 			refresh_token TEXT,
-			access_token TEXT,
+				access_token TEXT,
+				oauth_subject TEXT,
 			expires_at INTEGER,
 			created_at INTEGER NOT NULL,
 			last_used INTEGER,
@@ -408,7 +411,7 @@ function migrateAccountsTable(
 				`
 		INSERT INTO accounts_v2 (
 			id, name, provider, auth_method, base_url, api_key, refresh_token,
-			access_token, expires_at, created_at, last_used, request_count,
+				access_token, oauth_subject, expires_at, created_at, last_used, request_count,
 			total_requests, weight, rate_limited_until, session_start,
 			session_request_count, paused, rate_limit_reset, rate_limit_status,
 			rate_limit_remaining
@@ -421,7 +424,8 @@ function migrateAccountsTable(
 			${columnOr(columns, "base_url", "NULL")},
 			${columnOr(columns, "api_key", "NULL")},
 			${columnOr(columns, "refresh_token", "NULL")},
-			${columnOr(columns, "access_token", "NULL")},
+				${columnOr(columns, "access_token", "NULL")},
+				${columnOr(columns, "oauth_subject", "NULL")},
 			${columnOr(columns, "expires_at", "NULL")},
 			${columnOr(columns, "created_at", "CAST(unixepoch('subsec') * 1000 AS INTEGER)")},
 			${columnOr(columns, "last_used", "NULL")},
@@ -718,7 +722,8 @@ export function ensureSchema(db: Database, progress?: MigrationProgress): void {
 			base_url TEXT,
 			api_key TEXT,
 			refresh_token TEXT,
-			access_token TEXT,
+				access_token TEXT,
+				oauth_subject TEXT,
 			expires_at INTEGER,
 			created_at INTEGER NOT NULL,
 			last_used INTEGER,

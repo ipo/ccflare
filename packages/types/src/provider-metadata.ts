@@ -46,6 +46,15 @@ const PROVIDER_METADATA_MAP = {
 			"Requires Kimi Code OAuth device authorization (approve in browser, no code to paste)",
 		],
 	},
+	grok: {
+		displayLabel: "Grok",
+		authMethod: "oauth",
+		supportsOAuth: true,
+		oauthGrant: "authorization_code",
+		supportsWebSocket: false,
+		defaultBaseUrl: "https://cli-chat-proxy.grok.com/v1",
+		specialRequirements: ["Requires Grok Build OAuth authentication"],
+	},
 } as const satisfies Record<
 	string,
 	{

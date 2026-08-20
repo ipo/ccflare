@@ -18,7 +18,7 @@ import type { AccountModelsResponse } from "../types";
 import { credentialRefreshHttpError } from "./credential-errors";
 
 const log = new Logger("AccountModelsHandler");
-const MODELS_PROVIDERS = new Set<AccountProvider>(["codex"]);
+const MODELS_PROVIDERS = new Set<AccountProvider>(["codex", "grok"]);
 
 function hasUnauthorizedVersion(report: ProviderModelsReport): boolean {
 	return report.versions.some((version) => version.status === 401);
@@ -45,7 +45,7 @@ function toModelsResponse(
 
 /**
  * Fetch the provider-native model catalog for one selected account without
- * involving load balancing. Only Codex accounts are supported; every other
+ * involving load balancing. Only Codex and Grok accounts are supported; every other
  * provider returns 501 for now.
  */
 export function createAccountModelsHandler(

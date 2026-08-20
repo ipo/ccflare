@@ -26,6 +26,7 @@ const QUOTA_PROVIDERS = new Set<AccountProvider>([
 	"claude-code",
 	"codex",
 	"kimi",
+	"grok",
 ]);
 
 function toQuotaSnapshot(response: AccountQuotaResponse): AccountQuotaSnapshot {

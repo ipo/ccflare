@@ -71,7 +71,7 @@ Options:
   --logs [N]           Stream latest N lines then follow
   --stats              Show statistics (JSON output)
   --add-account <name> Add a new account
-    --provider <anthropic|openai|claude-code|codex>  Account provider (required)
+    --provider <anthropic|openai|claude-code|codex|kimi|grok>  Account provider (required)
   --list               List all accounts
   --remove <name>      Remove an account
   --pause <name>       Pause an account
@@ -92,6 +92,7 @@ Examples:
   ccflare --add-account team --provider openai         # Add OpenAI API key account
   ccflare --add-account claude-work --provider claude-code  # Start Claude Code OAuth
   ccflare --add-account codex-work --provider codex         # Start Codex OAuth
+  ccflare --add-account grok-work --provider grok           # Start Grok Build OAuth
   ccflare --pause work           # Pause account
   ccflare --analyze              # Run performance analysis
   ccflare --stats                # View stats

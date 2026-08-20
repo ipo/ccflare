@@ -59,7 +59,7 @@ bun run dev --logs [N]  # Stream logs (optionally show last N lines first)
 bun run dev --stats
 
 # Account management
-bun run dev --add-account <name> --provider <anthropic|openai|claude-code|codex>
+bun run dev --add-account <name> --provider <anthropic|openai|claude-code|codex|kimi|grok>
 bun run dev --list
 bun run dev --remove <name>
 bun run dev --pause <name>

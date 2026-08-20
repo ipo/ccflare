@@ -20,6 +20,7 @@ export function serializeAccount(
 		provider: account.provider,
 		auth_method: account.auth_method,
 		base_url: account.base_url,
+		oauthSubject: account.oauth_subject ?? null,
 		requestCount: account.request_count,
 		totalRequests: account.total_requests,
 		lastUsed: account.last_used

@@ -902,6 +902,7 @@ describe("Anthropic passthrough integration", () => {
 			"claude-code",
 			"codex",
 			"kimi",
+			"grok",
 		]);
 
 		const createAccountResponse = await runCurl([
@@ -1721,9 +1722,9 @@ describe("Anthropic passthrough integration", () => {
 				messages: [{ role: "user", content: "all exhausted" }],
 			}),
 		]);
-		expect(exhaustedResponse.status).toBe(503);
-		expect(JSON.parse(exhaustedResponse.body)).toMatchObject({
-			error: expect.stringContaining("All accounts failed"),
+		expect(exhaustedResponse.status).toBe(429);
+		expect(JSON.parse(exhaustedResponse.body)).toEqual({
+			error: { message: "rate limited" },
 		});
 
 		const exhaustedRequests = upstreamRequests.slice(exhaustedStart);
@@ -1792,14 +1793,24 @@ describe("Anthropic passthrough integration", () => {
 				request.statusCode === 429,
 		)?.id;
 		expect(persistedRateLimitId).toBeTruthy();
-		const persistedRateLimitDetail = await readJson<{
-			response: { status: number; body: string | null } | null;
-			meta: { account: { id: string | null }; trace: { provider: string; path: string } };
-		}>(`/api/requests/${persistedRateLimitId}/detail`);
+		const persistedRateLimitBody = Buffer.from(
+			retainedRateLimitResponse.body,
+		).toString("base64");
+		const persistedRateLimitDetail = await waitFor(
+			() =>
+				readJson<{
+					response: { status: number; body: string | null } | null;
+					meta: {
+						account: { id: string | null };
+						trace: { provider: string; path: string };
+					};
+				}>(`/api/requests/${persistedRateLimitId}/detail`),
+			(detail) => detail.response?.body === persistedRateLimitBody,
+		);
 		expect(persistedRateLimitDetail).toMatchObject({
 			response: {
 				status: 429,
-				body: retainedRateLimitResponse.body,
+				body: persistedRateLimitBody,
 			},
 			meta: {
 				account: { id: createdAccountId },
@@ -1859,5 +1870,5 @@ describe("Anthropic passthrough integration", () => {
 			(health) => health.accounts === 0,
 		);
 		expect(finalHealth.accounts).toBe(0);
-	});
+	}, 20_000);
 });

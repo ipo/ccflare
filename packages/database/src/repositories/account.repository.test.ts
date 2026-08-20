@@ -80,11 +80,12 @@ describe("AccountRepository", () => {
 	it("updates tokens only while both stored credentials match", () => {
 		const account = repository.create({
 			name: "guarded-refresh",
-			provider: "kimi",
+			provider: "grok",
 			auth_method: "oauth",
 			access_token: "old-access",
 			refresh_token: "old-refresh",
 			expires_at: 1,
+			oauth_subject: "verified-grok-subject",
 		});
 
 		expect(
@@ -114,6 +115,7 @@ describe("AccountRepository", () => {
 				access_token: "new-access",
 				refresh_token: "new-refresh",
 				expires_at: 300,
+				oauth_subject: "verified-grok-subject",
 			}),
 		);
 	});

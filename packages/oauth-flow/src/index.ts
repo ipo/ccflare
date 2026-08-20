@@ -34,18 +34,17 @@ function getOAuthProviderForFlow(provider: OAuthFlowProvider): OAuthProvider {
 	return oauthProvider;
 }
 
-function getOAuthConfigForFlow(
+async function discoverOAuthConfigForFlow(
 	provider: OAuthFlowProvider,
 	config: Config,
 	oauthProvider: OAuthProvider,
-): OAuthProviderConfig {
-	const oauthConfig = oauthProvider.getOAuthConfig();
-
-	if (provider === "claude-code") {
-		oauthConfig.clientId = config.getRuntime().clientId;
-	}
-
-	return oauthConfig;
+): Promise<OAuthProviderConfig> {
+	const discovered = oauthProvider.discoverConfig
+		? await oauthProvider.discoverConfig()
+		: oauthProvider.getOAuthConfig();
+	if (provider === "claude-code")
+		discovered.clientId = config.getRuntime().clientId;
+	return discovered;
 }
 
 export interface BeginOptions {
@@ -63,6 +62,8 @@ export interface BeginResult {
 	 * browser. Present so UIs can display it alongside the verification URL.
 	 */
 	userCode?: string;
+	/** Resolves when a loopback callback has automatically completed the account. */
+	completion?: Promise<AccountCreated>;
 }
 
 export interface CompleteOptions {
@@ -86,6 +87,46 @@ interface SessionState {
 	verifier: string;
 	state: string;
 	status: "pending" | "completed";
+	nonce?: string;
+}
+
+const loopbackServers = new Map<number, ReturnType<typeof Bun.serve>>();
+const loopbackTimeouts = new Map<number, ReturnType<typeof setTimeout>>();
+const loopbackControllers = new Map<
+	string,
+	{ stop(): void; settle(account: AccountCreated): void }
+>();
+
+export function stopAllOAuthLoopbackServers(): void {
+	for (const controller of [...loopbackControllers.values()]) controller.stop();
+	for (const timeout of loopbackTimeouts.values()) clearTimeout(timeout);
+	for (const server of loopbackServers.values()) server.stop(true);
+	loopbackControllers.clear();
+	loopbackTimeouts.clear();
+	loopbackServers.clear();
+}
+
+function finishLoopbackSession(
+	sessionId: string,
+	account: AccountCreated,
+): void {
+	const controller = loopbackControllers.get(sessionId);
+	if (!controller) return;
+	controller.settle(account);
+	controller.stop();
+}
+
+function browserPage(ok: boolean, detail: string): Response {
+	return new Response(
+		`<!doctype html><html><body><h1>${ok ? "Account connected" : "Authorization failed"}</h1><p>${detail.replaceAll("&", "&amp;").replaceAll("<", "&lt;")}</p></body></html>`,
+		{
+			status: ok ? 200 : 400,
+			headers: {
+				"content-type": "text/html; charset=utf-8",
+				"cache-control": "no-store",
+			},
+		},
+	);
 }
 
 /**
@@ -118,7 +159,7 @@ export class OAuthFlow {
 		const oauthProvider = getOAuthProviderForFlow(provider);
 
 		// Get OAuth config with provider-specific client ID handling
-		const oauthConfig = getOAuthConfigForFlow(
+		const oauthConfig = await discoverOAuthConfigForFlow(
 			provider,
 			this.config,
 			oauthProvider,
@@ -159,13 +200,18 @@ export class OAuthFlow {
 
 		// Generate PKCE challenge
 		const pkce = await generatePKCE();
+		// Grok's loopback callback uses state as a CSRF secret, so keep it
+		// independent from the PKCE verifier that must remain private.
+		pkce.state = provider === "grok" ? crypto.randomUUID() : pkce.verifier;
+		pkce.nonce = crypto.randomUUID();
 
 		// Generate auth URL
 		const authUrl = oauthProvider.generateAuthUrl(oauthConfig, pkce);
 
 		const sessionState: SessionState = {
 			verifier: pkce.verifier,
-			state: pkce.verifier,
+			state: pkce.state,
+			nonce: pkce.nonce,
 			status: "pending",
 		};
 
@@ -177,12 +223,19 @@ export class OAuthFlow {
 			Date.now() + 10 * 60 * 1000,
 		);
 
-		return {
+		const result: BeginResult = {
 			sessionId,
 			authUrl,
 			pkce,
 			oauthConfig,
 		};
+		try {
+			result.completion = this.startLoopbackCompletion(result);
+		} catch (error) {
+			this.dbOps.deleteAuthSession(sessionId);
+			throw error;
+		}
+		return result;
 	}
 
 	/**
@@ -198,6 +251,14 @@ export class OAuthFlow {
 	async complete(
 		opts: CompleteOptions,
 		flowData?: BeginResult,
+	): Promise<AccountCreated> {
+		return this.completeSession(opts, flowData, false);
+	}
+
+	private async completeSession(
+		opts: CompleteOptions,
+		flowData: BeginResult | undefined,
+		deferLoopbackStop: boolean,
 	): Promise<AccountCreated> {
 		const { sessionId, code } = opts;
 		const authSession = this.dbOps.getAuthSession(sessionId);
@@ -224,12 +285,14 @@ export class OAuthFlow {
 				existingAccount.provider === provider &&
 				existingAccount.auth_method === "oauth"
 			) {
-				return {
+				const account = {
 					id: existingAccount.id,
 					name: existingAccount.name,
 					provider,
-					authType: "oauth",
+					authType: "oauth" as const,
 				};
+				if (!deferLoopbackStop) finishLoopbackSession(sessionId, account);
+				return account;
 			}
 
 			throw new Error("OAuth session has already been completed.");
@@ -237,7 +300,7 @@ export class OAuthFlow {
 
 		const resolvedFlowData =
 			flowData ??
-			this.createFlowDataFromSession(sessionId, provider, sessionState);
+			(await this.createFlowDataFromSession(sessionId, provider, sessionState));
 
 		// Get OAuth provider
 		const oauthProvider = getOAuthProviderForFlow(provider);
@@ -247,6 +310,7 @@ export class OAuthFlow {
 			code,
 			resolvedFlowData.pkce.verifier,
 			resolvedFlowData.oauthConfig,
+			{ state: sessionState.state, nonce: sessionState.nonce },
 		);
 
 		const account = this.createAccountWithOAuth(name, provider, tokens);
@@ -258,16 +322,17 @@ export class OAuthFlow {
 			} satisfies SessionState),
 			Date.now() + 5 * 60 * 1000,
 		);
+		if (!deferLoopbackStop) finishLoopbackSession(sessionId, account);
 		return account;
 	}
 
-	private createFlowDataFromSession(
+	private async createFlowDataFromSession(
 		sessionId: string,
 		provider: OAuthFlowProvider,
 		sessionState: SessionState,
-	): BeginResult {
+	): Promise<BeginResult> {
 		const oauthProvider = getOAuthProviderForFlow(provider);
-		const oauthConfig = getOAuthConfigForFlow(
+		const oauthConfig = await discoverOAuthConfigForFlow(
 			provider,
 			this.config,
 			oauthProvider,
@@ -308,6 +373,7 @@ export class OAuthFlow {
 			verifier: parsed.verifier,
 			state: parsed.state,
 			status: parsed.status,
+			...(typeof parsed.nonce === "string" && { nonce: parsed.nonce }),
 		};
 	}
 
@@ -322,6 +388,7 @@ export class OAuthFlow {
 			accessToken: tokens.accessToken,
 			refreshToken: tokens.refreshToken ?? null,
 			expiresAt: tokens.expiresAt,
+			oauthSubject: tokens.oauthSubject ?? null,
 		});
 
 		return {
@@ -330,6 +397,114 @@ export class OAuthFlow {
 			provider,
 			authType: "oauth",
 		};
+	}
+
+	private startLoopbackCompletion(
+		flow: BeginResult,
+	): Promise<AccountCreated> | undefined {
+		const redirect = new URL(flow.oauthConfig.redirectUri);
+		if (
+			(redirect.hostname !== "127.0.0.1" &&
+				redirect.hostname !== "localhost") ||
+			!redirect.port
+		)
+			return undefined;
+		const port = Number(redirect.port);
+		if (loopbackServers.has(port)) {
+			throw new Error(
+				`OAuth callback port ${port} is already handling another login`,
+			);
+		}
+		let settle!: (value: AccountCreated) => void;
+		let reject!: (error: Error) => void;
+		let server: ReturnType<typeof Bun.serve> | undefined;
+		let controller:
+			| { stop(): void; settle(account: AccountCreated): void }
+			| undefined;
+		const completion = new Promise<AccountCreated>((resolve, rejectPromise) => {
+			settle = resolve;
+			reject = rejectPromise;
+		});
+		const stop = () => {
+			clearTimeout(timeout);
+			server?.stop(true);
+			if (loopbackServers.get(port) === server) {
+				loopbackServers.delete(port);
+				loopbackTimeouts.delete(port);
+			}
+			if (loopbackControllers.get(flow.sessionId) === controller) {
+				loopbackControllers.delete(flow.sessionId);
+			}
+		};
+		const timeout = setTimeout(
+			() => {
+				stop();
+				this.dbOps.deleteAuthSession(flow.sessionId);
+				reject(new Error("OAuth loopback callback timed out"));
+			},
+			10 * 60 * 1000,
+		);
+		timeout.unref?.();
+		loopbackTimeouts.set(port, timeout);
+		try {
+			server = Bun.serve({
+				hostname: redirect.hostname,
+				port,
+				fetch: async (request) => {
+					const url = new URL(request.url);
+					if (request.method !== "GET" || url.pathname !== redirect.pathname)
+						return new Response("Not Found", { status: 404 });
+					const code = url.searchParams.get("code");
+					const state = url.searchParams.get("state");
+					const providerError =
+						url.searchParams.get("error_description") ??
+						url.searchParams.get("error");
+					if (providerError || !code || state !== flow.pkce.state) {
+						const error = new Error(
+							providerError ?? "OAuth callback state mismatch",
+						);
+						this.dbOps.deleteAuthSession(flow.sessionId);
+						clearTimeout(timeout);
+						setTimeout(stop, 250);
+						reject(error);
+						return browserPage(false, error.message);
+					}
+					try {
+						const account = await this.completeSession(
+							{ sessionId: flow.sessionId, code },
+							flow,
+							true,
+						);
+						clearTimeout(timeout);
+						setTimeout(stop, 250);
+						settle(account);
+						return browserPage(
+							true,
+							"You can close this window and return to ccflare.",
+						);
+					} catch (cause) {
+						const error =
+							cause instanceof Error
+								? cause
+								: new Error("Failed to complete OAuth flow");
+						this.dbOps.deleteAuthSession(flow.sessionId);
+						clearTimeout(timeout);
+						setTimeout(stop, 250);
+						reject(error);
+						return browserPage(false, error.message);
+					}
+				},
+			});
+			loopbackServers.set(port, server);
+			controller = { stop, settle };
+			loopbackControllers.set(flow.sessionId, controller);
+		} catch (cause) {
+			clearTimeout(timeout);
+			loopbackTimeouts.delete(port);
+			throw cause;
+		}
+		void completion.catch(() => {});
+		return completion;
 	}
 }
 

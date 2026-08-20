@@ -131,15 +131,24 @@ describe("selectAccountsForRequest", () => {
 			getAccountAvailability(
 				meta,
 				makeContext([
-					{ ...createAccount("a1", "cooling", "anthropic"), rate_limited_until: now + 60_000 },
-					{ ...createAccount("a2", "later", "anthropic"), rate_limited_until: now + 120_000 },
+					{
+						...createAccount("a1", "cooling", "anthropic"),
+						rate_limited_until: now + 60_000,
+					},
+					{
+						...createAccount("a2", "later", "anthropic"),
+						rate_limited_until: now + 120_000,
+					},
 				]),
 			),
 		).toEqual({ kind: "cooling_down", retryAt: now + 60_000 });
 		expect(
-			getAccountAvailability(meta, makeContext([
-				{ ...createAccount("a3", "paused", "anthropic"), paused: true },
-			])),
+			getAccountAvailability(
+				meta,
+				makeContext([
+					{ ...createAccount("a3", "paused", "anthropic"), paused: true },
+				]),
+			),
 		).toEqual({ kind: "unavailable" });
 	});
 });

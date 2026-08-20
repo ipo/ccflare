@@ -4,7 +4,7 @@
 
 ccflare is a Bun/TypeScript monorepo that:
 
-- proxies provider-native HTTP and websocket APIs
+- proxies provider-native HTTP and websocket APIs, including Grok Build Responses
 - balances traffic across configured accounts
 - persists request/account/auth-session state in SQLite
 - exposes a management API plus browser and terminal UIs
@@ -270,6 +270,8 @@ Built-in providers:
 - `openai`
 - `claude-code`
 - `codex`
+- `kimi`
+- `grok`
 
 The provider registry is the source of truth for:
 

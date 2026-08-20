@@ -9,6 +9,7 @@ describe("built-in providers", () => {
 			"claude-code",
 			"codex",
 			"kimi",
+			"grok",
 		]);
 	});
 
@@ -38,5 +39,16 @@ describe("built-in providers", () => {
 			upstreamPath: "/responses",
 			query: "",
 		});
+	});
+
+	it("registers Grok as HTTP-only and resolves native Responses", () => {
+		const provider = providerRegistry.getProvider("grok");
+		if (!provider) throw new Error("grok provider was not registered");
+		expect(resolveProvider("/v1/grok/responses")).toEqual({
+			provider,
+			upstreamPath: "/responses",
+			query: "",
+		});
+		expect(provider?.supportsWebSocket?.("/responses")).toBe(false);
 	});
 });

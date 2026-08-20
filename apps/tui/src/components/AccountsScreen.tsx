@@ -419,7 +419,9 @@ export function AccountsScreen({ refreshKey }: AccountsScreenProps) {
 									? C.openai
 									: acc.provider === "claude-code"
 										? C.claudeCode
-										: C.codex;
+										: acc.provider === "grok"
+											? C.grok
+											: C.codex;
 
 						return (
 							<box

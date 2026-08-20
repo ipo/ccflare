@@ -18,7 +18,7 @@ export type ProxyAttemptOutcome =
 			resetTime?: number;
 			upstreamRequestStartedAt: number;
 			responseHeadersReceivedAt: number;
-		}
+	  }
 	| { kind: "failed" };
 
 /**
@@ -41,6 +41,13 @@ export async function proxyUnauthenticated(
 	ctx: ResolvedProxyContext,
 ): Promise<Response> {
 	log.warn(ERROR_MESSAGES.NO_ACCOUNTS);
+	if (ctx.providerName === "grok") {
+		return ctx.provider.buildProxyErrorResponse({
+			kind: "service_unavailable",
+			message:
+				"Grok requires a connected OAuth account; start login with POST /api/auth/grok/init",
+		});
+	}
 
 	const targetUrl = ctx.provider.buildUrl(ctx.upstreamPath, url.search);
 	const headers = ctx.provider.prepareHeaders(req.headers, null);
@@ -154,21 +161,21 @@ export async function proxyWithAccount(
 		return {
 			kind: "forwarded",
 			response: await forwardToClient(
-			{
-				requestId: requestMeta.id,
-				method: requestMeta.method,
-				path: url.pathname,
-				account,
-				requestHeaders: req.headers,
-				requestBody: requestBodyBuffer,
-				response,
-				timestamp: requestMeta.timestamp,
-				upstreamRequestStartedAt,
-				responseHeadersReceivedAt,
-				retryAttempt: 0,
-				failoverAttempts,
-			},
-			ctx,
+				{
+					requestId: requestMeta.id,
+					method: requestMeta.method,
+					path: url.pathname,
+					account,
+					requestHeaders: req.headers,
+					requestBody: requestBodyBuffer,
+					response,
+					timestamp: requestMeta.timestamp,
+					upstreamRequestStartedAt,
+					responseHeadersReceivedAt,
+					retryAttempt: 0,
+					failoverAttempts,
+				},
+				ctx,
 			),
 		};
 	} catch (err) {
