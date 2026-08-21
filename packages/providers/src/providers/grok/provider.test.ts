@@ -139,6 +139,37 @@ describe("GrokProvider", () => {
 		});
 	});
 
+	it("treats an omitted ProtoJSON usage percentage as zero for a current period", async () => {
+		const provider = new GrokProvider();
+		const account = createOAuthAccount("grok");
+		const report = await provider.fetchQuota(account, (async () =>
+			Response.json({
+				config: {
+					currentPeriod: {
+						type: "USAGE_PERIOD_TYPE_WEEKLY",
+						start: "2026-08-20T00:00:00Z",
+						end: "2026-08-27T00:00:00Z",
+					},
+					onDemandCap: { val: 0 },
+					onDemandUsed: {},
+					isUnifiedBillingUser: true,
+					prepaidBalance: {},
+				},
+			})) as unknown as typeof fetch);
+
+		expect(report).toMatchObject({
+			state: "ok",
+			windows: [
+				{
+					id: "grok:included",
+					period: "weekly",
+					usedPercent: 0,
+					resetAt: "2026-08-27T00:00:00Z",
+				},
+			],
+		});
+	});
+
 	it("normalizes legacy quota and fails closed for malformed shapes", async () => {
 		const provider = new GrokProvider();
 		const account = createOAuthAccount("grok");
@@ -160,6 +191,14 @@ describe("GrokProvider", () => {
 		const malformed = await provider.fetchQuota(account, (async () =>
 			Response.json({ config: {} })) as unknown as typeof fetch);
 		expect(malformed).toMatchObject({ state: "failed", windows: [] });
+		const invalidCurrent = await provider.fetchQuota(account, (async () =>
+			Response.json({
+				config: {
+					creditUsagePercent: "zero",
+					currentPeriod: { type: "USAGE_PERIOD_TYPE_WEEKLY" },
+				},
+			})) as unknown as typeof fetch);
+		expect(invalidCurrent).toMatchObject({ state: "failed", windows: [] });
 	});
 
 	it("uses only the live /models catalog and returns no fallback on failure", async () => {

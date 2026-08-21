@@ -55,4 +55,35 @@ describe("AccountListItem rate-limit controls", () => {
 
 		expect(html).not.toContain("Reset local rate limit");
 	});
+
+	it("renders a fresh zero-usage Grok quota snapshot", () => {
+		const grokAccount = account(false);
+		grokAccount.provider = "grok";
+		grokAccount.quota = {
+			state: "fresh",
+			collectedAt: "2026-08-20T16:00:00.000Z",
+			lastAttemptAt: "2026-08-20T16:00:00.000Z",
+			error: null,
+			windows: [
+				{
+					id: "grok:included",
+					label: "Included credits",
+					period: "weekly",
+					scope: "account",
+					usedPercent: 0,
+					resetAt: "2026-08-27T00:00:00.000Z",
+				},
+			],
+		};
+
+		const html = renderToStaticMarkup(
+			<AccountListItem account={grokAccount} {...actions} />,
+		);
+
+		expect(html).toContain("Provider quota");
+		expect(html).toContain("Included credits");
+		expect(html).toContain("0% used");
+		expect(html).toContain("100% remaining");
+		expect(html).not.toContain("Unavailable");
+	});
 });

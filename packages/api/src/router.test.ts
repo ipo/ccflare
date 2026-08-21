@@ -1333,13 +1333,14 @@ describe("APIRouter", () => {
 			if (request.url.endsWith("/billing?format=credits")) {
 				return Response.json({
 					config: {
-						creditUsagePercent: 25,
 						currentPeriod: {
 							type: "USAGE_PERIOD_TYPE_WEEKLY",
+							start: "2026-08-20T00:00:00Z",
 							end: "2026-08-27T00:00:00Z",
 						},
+						onDemandCap: { val: 0 },
+						onDemandUsed: { val: 0 },
 					},
-					onDemandEnabled: false,
 				});
 			}
 			if (request.url.endsWith("/models")) {
@@ -1370,12 +1371,30 @@ describe("APIRouter", () => {
 				windows: [
 					expect.objectContaining({
 						id: "grok:included",
-						usedPercent: 25,
+						usedPercent: 0,
 					}),
 				],
 			}),
 		);
 		expect(dbOps.getAccount(account.id)?.rate_limited_until).toBeNull();
+		const accountsResponse = await apiRequest(router, "GET", "/api/accounts");
+		expect(accountsResponse.status).toBe(200);
+		expect(await accountsResponse.json()).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					id: account.id,
+					quota: expect.objectContaining({
+						state: "fresh",
+						windows: [
+							expect.objectContaining({
+								id: "grok:included",
+								usedPercent: 0,
+							}),
+						],
+					}),
+				}),
+			]),
+		);
 
 		const modelsResponse = await apiRequest(
 			router,

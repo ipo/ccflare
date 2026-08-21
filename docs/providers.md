@@ -362,6 +362,8 @@ explicit. Cross-family collaboration messages remain plaintext.
   the subject is stored
 - billing quota comes from `/billing?format=credits`; the authoritative live
   catalog comes from `/models`, with no `/models-v2` or hardcoded fallback
+- credits responses may omit `creditUsagePercent` when the current period has
+  zero usage; the quota parser treats that ProtoJSON default omission as 0%
 - Grok Build 1.0.6 embeds `grok-4.6` and `grok-4.5` with 500k context and the
   Responses backend. 4.6 advertises xhigh/high/medium/low effort and 4.5
   advertises high/medium/low. These entries are documentation, not fallback data.

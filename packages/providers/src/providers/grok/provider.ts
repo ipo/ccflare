@@ -64,6 +64,12 @@ function numberAt(value: unknown): number | undefined {
 		: undefined;
 }
 
+function centValue(value: unknown): number | undefined {
+	if (!isRecord(value)) return undefined;
+	if (Object.keys(value).length === 0) return 0;
+	return numberAt(value.val);
+}
+
 export class GrokProvider extends OpenAIProvider {
 	name = "grok";
 	defaultBaseUrl = "https://cli-chat-proxy.grok.com/v1";
@@ -172,18 +178,30 @@ export class GrokProvider extends OpenAIProvider {
 			let limit: number | undefined;
 			let period = "current period";
 			let resetAt: string | undefined;
-			if (usedPercent !== undefined && isRecord(config.currentPeriod)) {
-				if (typeof config.currentPeriod.type === "string")
-					period = config.currentPeriod.type
+			if (isRecord(config.currentPeriod)) {
+				const currentPeriod = config.currentPeriod;
+				const hasPeriodDetails = [
+					currentPeriod.type,
+					currentPeriod.start,
+					currentPeriod.end,
+				].some((value) => typeof value === "string");
+				if (!hasPeriodDetails)
+					throw new Error("Grok billing response has an unknown quota shape");
+				if (usedPercent === undefined) {
+					if (Object.hasOwn(config, "creditUsagePercent"))
+						throw new Error("Grok billing response has invalid credit usage");
+					// ProtoJSON omits scalar fields holding their default value. A valid
+					// current period with no percentage therefore means 0% usage.
+					usedPercent = 0;
+				}
+				if (typeof currentPeriod.type === "string")
+					period = currentPeriod.type
 						.replace("USAGE_PERIOD_TYPE_", "")
 						.toLowerCase();
-				if (typeof config.currentPeriod.end === "string")
-					resetAt = config.currentPeriod.end;
+				if (typeof currentPeriod.end === "string") resetAt = currentPeriod.end;
 			} else {
-				limit = isRecord(config.monthlyLimit)
-					? numberAt(config.monthlyLimit.val)
-					: undefined;
-				used = isRecord(config.used) ? numberAt(config.used.val) : undefined;
+				limit = centValue(config.monthlyLimit);
+				used = centValue(config.used);
 				if (limit === undefined || used === undefined || limit <= 0)
 					throw new Error("Grok billing response has an unknown quota shape");
 				usedPercent = Math.min(100, (used / limit) * 100);
@@ -205,12 +223,8 @@ export class GrokProvider extends OpenAIProvider {
 					...(resetAt && { resetAt }),
 				},
 			];
-			const onDemandCap = isRecord(config.onDemandCap)
-				? numberAt(config.onDemandCap.val)
-				: undefined;
-			const onDemandUsed = isRecord(config.onDemandUsed)
-				? numberAt(config.onDemandUsed.val)
-				: undefined;
+			const onDemandCap = centValue(config.onDemandCap);
+			const onDemandUsed = centValue(config.onDemandUsed);
 			if (
 				onDemandCap !== undefined &&
 				onDemandUsed !== undefined &&
